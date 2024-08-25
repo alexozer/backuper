@@ -204,13 +204,15 @@ where
     F: FnOnce() -> anyhow::Result<()>,
 {
     println!("[backeruper] Starting task: {name}");
-    let result = func();
-    if let Err(e) = result {
-        let err_str = format!("[{}] {}", name, e);
-        error_list.push(err_str);
-        println!("[backeruper] Task failed: {name}");
-    } else {
-        println!("[backeruper] Task succeeded: {name}");
+    match func() {
+        Ok(()) => {
+            println!("[backeruper] Task succeeded: {name}");
+        }
+        Err(e) => {
+            let err_str = format!("[{}] {}", name, e);
+            error_list.push(err_str);
+            println!("[backeruper] Task failed: {name}");
+        }
     }
 }
 
