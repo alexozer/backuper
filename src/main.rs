@@ -206,7 +206,8 @@ where
     println!("[backeruper] Starting task: {name}");
     let result = func();
     if let Err(e) = result {
-        error_list.push(e.to_string());
+        let err_str = format!("[{}] {}", name, e);
+        error_list.push(err_str);
         println!("[backeruper] Task failed: {name}");
     } else {
         println!("[backeruper] Task succeeded: {name}");
@@ -394,7 +395,7 @@ fn main() -> anyhow::Result<()> {
         body = format!("Completed in {dur_pretty}\n\nHope you're having a nice day :)");
     } else {
         let error_word = if errors.len() == 1 { "error" } else { "errors" };
-        let joined_errors = errors.join("");
+        let joined_errors = errors.join("\n");
         subject = format!("Backup {os_pretty} failed! {} {error_word}", errors.len());
         body = format!("Completed in {dur_pretty}\n\n{joined_errors}");
     }
