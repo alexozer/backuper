@@ -204,14 +204,20 @@ where
     F: FnOnce() -> anyhow::Result<()>,
 {
     println!("[backeruper] Starting task: {name}");
-    match func() {
+
+    let start = time::Instant::now();
+    let result = func();
+    let dur = start.elapsed();
+    let pretty_dur = pretty_duration(dur);
+
+    match result {
         Ok(()) => {
-            println!("[backeruper] Task succeeded: {name}");
+            println!("[backeruper] Task succeeded in {pretty_dur}: {name}");
         }
         Err(e) => {
-            let err_str = format!("[{}] {}", name, e);
+            let err_str = format!("[{} in {pretty_dur}] {}", name, e);
             error_list.push(err_str);
-            println!("[backeruper] Task failed: {name}");
+            println!("[backeruper] Task failed in {pretty_dur}: {name}");
         }
     }
 }
