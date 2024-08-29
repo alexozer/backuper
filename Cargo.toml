@@ -5,5 +5,8 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.86"
+chrono = "0.4.38"
+env_logger = "0.11.5"
 homedir = "0.3.3"
 lettre = "0.11.7"
+log = "0.4.22"

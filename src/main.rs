@@ -144,7 +144,7 @@ impl<'a> ShBuilder<'a> {
     fn run(self) -> anyhow::Result<()> {
         // Print command to run
         let cmd_str = self.cmd.join(" ");
-        println!("[backeruper] Running: {cmd_str}");
+        log::info!("Running: {cmd_str}");
 
         // Spawn a new child process with the given command, args, and env vars
         let mut child = Command::new(self.cmd[0])
@@ -203,7 +203,7 @@ fn try_task<F>(name: &str, func: F, error_list: &mut Vec<String>)
 where
     F: FnOnce() -> anyhow::Result<()>,
 {
-    println!("[backeruper] Starting task: {name}");
+    log::info!("Starting task: {name}");
 
     let start = time::Instant::now();
     let result = func();
@@ -212,12 +212,12 @@ where
 
     match result {
         Ok(()) => {
-            println!("[backeruper] Task succeeded in {pretty_dur}: {name}");
+            log::info!("Task succeeded in {pretty_dur}: {name}");
         }
         Err(e) => {
             let err_str = format!("[{} in {pretty_dur}] {}", name, e);
             error_list.push(err_str);
-            println!("[backeruper] Task failed in {pretty_dur}: {name}");
+            log::error!("Task failed in {pretty_dur}: {name}");
         }
     }
 }
@@ -261,10 +261,7 @@ fn backup_filesystem_to(
     let env = restic_config_to_env(config);
     sh(&restic_args).env(&env).input(&input).run()?;
 
-    println!(
-        "[backeruper] Backed up local filesystem to {}",
-        config.restic_repository
-    );
+    log::info!("Backed up local filesystem to {}", config.restic_repository);
     Ok(())
 }
 
@@ -300,10 +297,7 @@ fn backup_wsl(config: &ResticConfig) -> anyhow::Result<()> {
     args.extend(gen_exclude_flags(EXCLUDE_PATTERNS));
 
     sh(&args).env(&env).run()?;
-    println!(
-        "[backeruper] Backed up WSL filesystem to {}",
-        config.restic_repository
-    );
+    log::info!("Backed up WSL filesystem to {}", config.restic_repository);
     Ok(())
 }
 
@@ -378,7 +372,35 @@ fn do_backup(is_windows: bool) -> Vec<String> {
     errors
 }
 
+// Stolen from Zed
+fn init_stdout_logger() {
+    env_logger::Builder::new()
+        .filter_level(log::LevelFilter::Info)
+        .parse_default_env()
+        .format(|buf, record| {
+            use env_logger::fmt::style::{AnsiColor, Style};
+
+            let subtle = Style::new().fg_color(Some(AnsiColor::BrightBlack.into()));
+            write!(buf, "{subtle}[{subtle:#}")?;
+            write!(
+                buf,
+                "{} ",
+                chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%:z")
+            )?;
+            let level_style = buf.default_level_style(record.level());
+            write!(buf, "{level_style}{:<5}{level_style:#}", record.level())?;
+            if let Some(path) = record.module_path() {
+                write!(buf, " {path}")?;
+            }
+            write!(buf, "{subtle}]{subtle:#}")?;
+            writeln!(buf, " {}", record.args())
+        })
+        .init();
+}
+
 fn main() -> anyhow::Result<()> {
+    init_stdout_logger();
+
     let mut args_it = env::args();
     args_it.next();
     let Some(os) = args_it.next() else {
