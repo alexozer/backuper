@@ -406,10 +406,13 @@ fn main() -> anyhow::Result<()> {
     let Some(os) = args_it.next() else {
         return Err(anyhow!("No OS provided"));
     };
-    if os != "windows" && os != "macos" {
-        return Err(anyhow!("Invalid OS provided: {}", os));
-    }
-    let is_windows = os == "windows";
+    let is_windows = match os.as_str() {
+        "windows" => true,
+        "macos" => false,
+        _ => {
+            return Err(anyhow!("Invalid OS provided: {}", os));
+        }
+    };
 
     let start = time::Instant::now();
     let errors = do_backup(is_windows);
