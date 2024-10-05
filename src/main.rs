@@ -1,4 +1,4 @@
-use anyhow::anyhow;
+use anyhow::{anyhow, Context};
 use lettre::{
     message::header::ContentType, transport::smtp::authentication::Credentials, Message,
     SmtpTransport, Transport,
@@ -174,10 +174,14 @@ impl<'a> ShBuilder<'a> {
     }
 }
 
+fn get_env_var(var: &str) -> anyhow::Result<String> {
+    env::var(var).with_context(|| format!("Env var not found: {}", var))
+}
+
 fn notify(subject: &str, body: &str) -> anyhow::Result<()> {
     // Grab credentials
-    let email_address = env::var("BACKUPER_EMAIL_ADDRESS")?;
-    let email_password = env::var("BACKUPER_EMAIL_PASSWORD")?;
+    let email_address = get_env_var("BACKUPER_EMAIL_ADDRESS")?;
+    let email_password = get_env_var("BACKUPER_EMAIL_PASSWORD")?;
 
     // Build the email
     let email = Message::builder()
@@ -270,7 +274,7 @@ fn backup_wsl(config: &ResticConfig) -> anyhow::Result<()> {
     sh(&["wsl.exe", "killall", "restic"]).check(false).run()?;
 
     // Securely pass environment variables to WSL (I think...)
-    let mut wslenv = env::var("WSLENV").unwrap_or_default();
+    let mut wslenv = get_env_var("WSLENV").unwrap_or_default();
     wslenv.push(':');
     wslenv.push_str(
         &restic_config_to_env(config)
@@ -352,10 +356,10 @@ fn do_backup_macos(cloud_config: &ResticConfig, errors: &mut Vec<String>) {
 fn do_backup(is_windows: bool) -> Vec<String> {
     let any_to_cloud_config_func = || -> anyhow::Result<ResticConfig> {
         Ok(ResticConfig {
-            restic_repository: env::var("BACKUPER_RESTIC_REPOSITORY")?,
-            restic_password: env::var("BACKUPER_RESTIC_PASSWORD")?,
-            aws_access_key_id: Some(env::var("BACKUPER_AWS_ACCESS_KEY_ID")?),
-            aws_secret_access_key: Some(env::var("BACKUPER_AWS_SECRET_ACCESS_KEY")?),
+            restic_repository: get_env_var("BACKUPER_RESTIC_REPOSITORY")?,
+            restic_password: get_env_var("BACKUPER_RESTIC_PASSWORD")?,
+            aws_access_key_id: Some(get_env_var("BACKUPER_AWS_ACCESS_KEY_ID")?),
+            aws_secret_access_key: Some(get_env_var("BACKUPER_AWS_SECRET_ACCESS_KEY")?),
         })
     };
     let cloud_config = match any_to_cloud_config_func() {
