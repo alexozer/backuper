@@ -30,20 +30,20 @@ static MAC_BACKUP_DIRS: &[BackupDir] = &[
 
 static WINDOWS_BACKUP_DIRS: &[BackupDir] = &[
     BackupDir::Home("Documents"),
-    BackupDir::Home("Pictures"),
-    BackupDir::Home("Music"),
-    BackupDir::Home("Videos"),
+    // BackupDir::Home("Pictures"),
+    // BackupDir::Home("Music"),
+    // BackupDir::Home("Videos"),
     // path.join(os.homedir(), 'build'),
-    BackupDir::Home("ghidra_scripts"),
+    // BackupDir::Home("ghidra_scripts"),
     BackupDir::Home("AppData\\Roaming"),
-    BackupDir::Home("AppData\\Local\\osu!"),
-    BackupDir::Home("AppData\\Local\\osulazer"),
+    // BackupDir::Home("AppData\\Local\\osu!"),
+    // BackupDir::Home("AppData\\Local\\osulazer"),
     BackupDir::Home("AppData\\Local\\OpenTabletDriver"),
-    BackupDir::Home("VirtualBox VMs"),
+    // BackupDir::Home("VirtualBox VMs"),
     // path.join(os.homedir(), 'iso'),
     BackupDir::Home("Dropbox"),
     BackupDir::Root("C:\\Program Files (x86)\\Steam\\steamapps\\common"),
-    BackupDir::Root("C:\\tools"),
+    // BackupDir::Root("C:\\tools"),
 ];
 
 static EXCLUDE_PATTERNS: &[&str] = &[
