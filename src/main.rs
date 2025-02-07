@@ -56,6 +56,8 @@ static EXCLUDE_PATTERNS: &[&str] = &[
     ".DS_Store",
     "build*/**",
     "Photo Booth Library",
+    "target/debug/**",
+    "target/release/**",
 ];
 
 //
