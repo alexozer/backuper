@@ -55,6 +55,7 @@ static EXCLUDE_PATTERNS: &[&str] = &[
     "*.photoslibrary",
     ".DS_Store",
     "build*/**",
+    "Photo Booth Library",
 ];
 
 //
