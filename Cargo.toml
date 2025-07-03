@@ -4,9 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-anyhow = "1.0.86"
-chrono = "0.4.38"
-env_logger = "0.11.5"
-homedir = "0.3.3"
-lettre = "0.11.7"
-log = "0.4.22"
+anyhow = "1.0.98"
+chrono = "0.4.41"
+env_logger = "0.11.8"
+log = "0.4.27"

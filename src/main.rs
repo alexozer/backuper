@@ -1,8 +1,4 @@
 use anyhow::{Context, anyhow};
-use lettre::{
-    Message, SmtpTransport, Transport, message::header::ContentType,
-    transport::smtp::authentication::Credentials,
-};
 use std::{
     env,
     io::Write,
@@ -76,7 +72,7 @@ fn backup_dirs_to_strings(backup_dirs: &[BackupDir]) -> anyhow::Result<Vec<Strin
         .iter()
         .map(|d| match d {
             BackupDir::Home(path_str) => {
-                let mut path = homedir::my_home()?.ok_or(anyhow!("Failed to get home dir"))?;
+                let mut path = std::env::home_dir().ok_or(anyhow!("Failed to get home dir"))?;
                 path.push(path_str);
                 Ok(path.to_string_lossy().to_string())
             }
@@ -179,31 +175,6 @@ impl<'a> ShBuilder<'a> {
 
 fn get_env_var(var: &str) -> anyhow::Result<String> {
     env::var(var).with_context(|| format!("Env var not found: {}", var))
-}
-
-fn notify(subject: &str, body: &str) -> anyhow::Result<()> {
-    // Grab credentials
-    let email_address = get_env_var("BACKUPER_EMAIL_ADDRESS")?;
-    let email_password = get_env_var("BACKUPER_EMAIL_PASSWORD")?;
-
-    // Build the email
-    let email = Message::builder()
-        .from(format!("Backup Script <{email_address}>").parse()?)
-        .to(format!("Alex Ozer <{email_address}>").parse()?)
-        .subject(subject)
-        .header(ContentType::TEXT_PLAIN)
-        .body(body.to_owned())?;
-
-    let creds = Credentials::new(email_address, email_password);
-
-    // Open a remote connection to gmail
-    let mailer = SmtpTransport::relay("smtp.gmail.com")?
-        .credentials(creds)
-        .build();
-
-    // Send the email
-    mailer.send(&email)?;
-    Ok(())
 }
 
 fn try_task<F>(name: &str, func: F, error_list: &mut Vec<String>)
@@ -428,18 +399,16 @@ fn main() -> anyhow::Result<()> {
     let os_pretty = if is_windows { "Windows" } else { "macOS" };
     let dur_pretty = pretty_duration(dur);
 
-    let subject: String;
-    let body: String;
     if errors.is_empty() {
-        subject = format!("Backup {os_pretty} succeeded");
-        body = format!("Completed in {dur_pretty}\n\nHope you're having a nice day :)");
+        log::info!("Completed in {dur_pretty}");
+        log::info!("Backup {os_pretty} succeeded");
+        log::info!("Hope you're having a nice day :)");
     } else {
         let error_word = if errors.len() == 1 { "error" } else { "errors" };
         let joined_errors = errors.join("\n");
-        subject = format!("Backup {os_pretty} failed! {} {error_word}", errors.len());
-        body = format!("Completed in {dur_pretty}\n\n{joined_errors}");
+        log::info!("Completed in {dur_pretty}\n\n{joined_errors}");
+        log::error!("Backup {os_pretty} failed! {} {error_word}", errors.len());
     }
 
-    notify(&subject, &body)?;
     Ok(())
 }
