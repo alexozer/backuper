@@ -12,7 +12,6 @@ use std::{
 
 enum BackupDir<'a> {
     Home(&'a str),
-    Root(&'a str),
 }
 
 static MAC_BACKUP_DIRS: &[BackupDir] = &[
@@ -22,24 +21,6 @@ static MAC_BACKUP_DIRS: &[BackupDir] = &[
     BackupDir::Home("Movies"),
     BackupDir::Home("Library/CloudStorage/Dropbox"),
     BackupDir::Home("Library/Application Support/Anki2"),
-];
-
-static WINDOWS_BACKUP_DIRS: &[BackupDir] = &[
-    BackupDir::Home("Documents"),
-    // BackupDir::Home("Pictures"),
-    // BackupDir::Home("Music"),
-    // BackupDir::Home("Videos"),
-    // path.join(os.homedir(), 'build'),
-    // BackupDir::Home("ghidra_scripts"),
-    BackupDir::Home("AppData\\Roaming"),
-    // BackupDir::Home("AppData\\Local\\osu!"),
-    // BackupDir::Home("AppData\\Local\\osulazer"),
-    BackupDir::Home("AppData\\Local\\OpenTabletDriver"),
-    // BackupDir::Home("VirtualBox VMs"),
-    // path.join(os.homedir(), 'iso'),
-    BackupDir::Home("Dropbox"),
-    BackupDir::Root("C:\\Program Files (x86)\\Steam\\steamapps\\common"),
-    // BackupDir::Root("C:\\tools"),
 ];
 
 static EXCLUDE_PATTERNS: &[&str] = &[
@@ -61,6 +42,7 @@ static EXCLUDE_PATTERNS: &[&str] = &[
 //
 
 struct ResticConfig {
+    name: String,
     restic_repository: String,
     restic_password: String,
     aws_access_key_id: Option<String>,
@@ -76,7 +58,6 @@ fn backup_dirs_to_strings(backup_dirs: &[BackupDir]) -> anyhow::Result<Vec<Strin
                 path.push(path_str);
                 Ok(path.to_string_lossy().to_string())
             }
-            BackupDir::Root(path_str) => Ok(path_str.to_string()),
         })
         .collect()
 }
@@ -112,7 +93,7 @@ struct ShBuilder<'a> {
     cmd: &'a [&'a str],
     env: &'a [(&'a str, &'a str)],
     input: &'a str,
-    check: bool,
+    show_output: bool,
 }
 
 impl<'a> ShBuilder<'a> {
@@ -121,7 +102,7 @@ impl<'a> ShBuilder<'a> {
             cmd,
             env: &[],
             input: "",
-            check: true,
+            show_output: false,
         }
     }
 
@@ -135,8 +116,8 @@ impl<'a> ShBuilder<'a> {
         self
     }
 
-    fn check(mut self, check: bool) -> Self {
-        self.check = check;
+    fn show_output(mut self) -> Self {
+        self.show_output = true;
         self
     }
 
@@ -146,13 +127,17 @@ impl<'a> ShBuilder<'a> {
         log::info!("Running: {cmd_str}");
 
         // Spawn a new child process with the given command, args, and env vars
-        let mut child = Command::new(self.cmd[0])
+        let mut cmd = Command::new(self.cmd[0]);
+        let mut child = cmd
             .args(&self.cmd[1..])
             .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .envs(self.env.to_vec())
-            .spawn()?;
+            .envs(self.env.to_vec());
+        if self.show_output {
+            child = child.stdout(Stdio::inherit()).stderr(Stdio::inherit());
+        } else {
+            child = child.stdout(Stdio::piped()).stderr(Stdio::piped());
+        }
+        let mut child = child.spawn()?;
 
         // Write the input to the child process's stdin
         child
@@ -163,8 +148,7 @@ impl<'a> ShBuilder<'a> {
 
         let output = child.wait_with_output()?;
 
-        // If checking is enabled and the process failed, return an error
-        if self.check && !output.status.success() {
+        if !output.status.success() {
             let stderr_str = String::from_utf8(output.stderr)?;
             return Err(anyhow!(stderr_str));
         }
@@ -200,16 +184,8 @@ where
     }
 }
 
-fn do_windows_upgrades() -> anyhow::Result<()> {
-    sh(&["choco", "upgrade", "all"]).run()?;
-    sh(&["wsl.exe", "sudo", "apt", "update"]).run()?;
-    sh(&["wsl.exe", "sudo", "apt", "upgrade", "-y"]).run()?;
-    sh(&["wsl.exe", "/home/linuxbrew/.linuxbrew/bin/brew", "upgrade"]).run()?;
-    Ok(())
-}
-
 fn do_macos_upgrades() -> anyhow::Result<()> {
-    sh(&["brew", "upgrade"]).run()
+    sh(&["brew", "upgrade"]).show_output().run()
 }
 
 fn restic_config_to_env(config: &ResticConfig) -> Vec<(&str, &str)> {
@@ -237,104 +213,43 @@ fn backup_filesystem_to(
 
     let input = backup_dirs_to_strings(file_patterns)?.join("\n");
     let env = restic_config_to_env(config);
-    sh(&restic_args).env(&env).input(&input).run()?;
+    sh(&restic_args)
+        .env(&env)
+        .input(&input)
+        .show_output()
+        .run()?;
 
     log::info!("Backed up local filesystem to {}", config.restic_repository);
     Ok(())
 }
 
-fn backup_wsl(config: &ResticConfig) -> anyhow::Result<()> {
-    // In case I forgot to kill `restic mount`, don't try to backup the mountpoint... ugh
-    sh(&["wsl.exe", "killall", "restic"]).check(false).run()?;
-
-    // Securely pass environment variables to WSL (I think...)
-    let mut wslenv = get_env_var("WSLENV").unwrap_or_default();
-    wslenv.push(':');
-    wslenv.push_str(
-        &restic_config_to_env(config)
-            .into_iter()
-            .map(|(k, _)| k)
-            .collect::<Vec<&str>>()
-            .join(":"),
-    );
-
-    let mut env = restic_config_to_env(config);
-    env.push(("WSLENV", &wslenv));
-
-    // Call restic in WSL
-    let mut args = vec![
-        "wsl.exe",
-        "--shell-type",
-        "none", // We don't want bash/zsh to try expanding our exclude glob patterns
-        "/home/linuxbrew/.linuxbrew/bin/restic",
-        "backup",
-        "/home/alex",
-        "--tag",
-        "WSL",
-    ];
-    args.extend(gen_exclude_flags(EXCLUDE_PATTERNS));
-
-    sh(&args).env(&env).run()?;
-    log::info!("Backed up WSL filesystem to {}", config.restic_repository);
-    Ok(())
-}
-
-fn backup_windows_to(
-    windows_config: &ResticConfig,
-    wsl_config: &ResticConfig,
-    errors: &mut Vec<String>,
-) {
-    try_task(
-        "Backup Windows Filesystem (Local)",
-        || {
-            backup_filesystem_to(
-                WINDOWS_BACKUP_DIRS,
-                windows_config,
-                &["--tag", "Windows", "--use-fs-snapshot"],
-            )
-        },
-        errors,
-    );
-    try_task("Backup WSL (Local)", || backup_wsl(wsl_config), errors);
-}
-
-fn do_backup_windows(cloud_config: &ResticConfig, errors: &mut Vec<String>) {
-    try_task("Windows Upgrades", do_windows_upgrades, errors);
-
-    let windows_to_local_config = ResticConfig {
-        restic_repository: "Z:\\restic".into(),
-        restic_password: cloud_config.restic_password.clone(),
-        aws_access_key_id: None,
-        aws_secret_access_key: None,
-    };
-    let wsl_to_local_config = ResticConfig {
-        restic_repository: "/mnt/c/restic".into(),
-        restic_password: cloud_config.restic_password.clone(),
-        aws_access_key_id: None,
-        aws_secret_access_key: None,
-    };
-
-    backup_windows_to(&windows_to_local_config, &wsl_to_local_config, errors);
-    backup_windows_to(cloud_config, cloud_config, errors);
-}
-
 fn do_backup_macos(cloud_config: &ResticConfig, errors: &mut Vec<String>) {
-    try_task("macOS Upgrades", do_macos_upgrades, errors);
+    log::info!("Backup to '{}' started", cloud_config.name);
     try_task(
         "Backup macOS Filesystem",
         || backup_filesystem_to(MAC_BACKUP_DIRS, cloud_config, &["--tag", "macOS"]),
         errors,
     );
+    log::info!("Backup to '{}' complete", cloud_config.name);
 }
 
-fn do_backup(is_windows: bool) -> Vec<String> {
-    let any_to_cloud_config_func = || -> anyhow::Result<ResticConfig> {
-        Ok(ResticConfig {
-            restic_repository: get_env_var("BACKUPER_RESTIC_REPOSITORY")?,
+fn do_backup() -> Vec<String> {
+    let any_to_cloud_config_func = || -> anyhow::Result<Vec<ResticConfig>> {
+        let nas_config = ResticConfig {
+            name: "NAS REST".into(),
+            restic_repository: get_env_var("BACKUPER_NAS_REPOSITORY")?,
+            restic_password: get_env_var("BACKUPER_PASSWORD")?,
+            aws_access_key_id: None,
+            aws_secret_access_key: None,
+        };
+        let cloud_config = ResticConfig {
+            name: "Cloud B2".into(),
+            restic_repository: get_env_var("BACKUPER_AWS_REPOSITORY")?,
             restic_password: get_env_var("BACKUPER_RESTIC_PASSWORD")?,
             aws_access_key_id: Some(get_env_var("BACKUPER_AWS_ACCESS_KEY_ID")?),
             aws_secret_access_key: Some(get_env_var("BACKUPER_AWS_SECRET_ACCESS_KEY")?),
-        })
+        };
+        Ok(vec![nas_config, cloud_config])
     };
     let cloud_config = match any_to_cloud_config_func() {
         Ok(conf) => conf,
@@ -342,10 +257,9 @@ fn do_backup(is_windows: bool) -> Vec<String> {
     };
 
     let mut errors = Vec::new();
-    if is_windows {
-        do_backup_windows(&cloud_config, &mut errors);
-    } else {
-        do_backup_macos(&cloud_config, &mut errors);
+    try_task("macOS Upgrades", do_macos_upgrades, &mut errors);
+    for config in cloud_config {
+        do_backup_macos(&config, &mut errors);
     }
     errors
 }
@@ -379,35 +293,21 @@ fn init_stdout_logger() {
 fn main() -> anyhow::Result<()> {
     init_stdout_logger();
 
-    let mut args_it = env::args();
-    args_it.next();
-    let Some(os) = args_it.next() else {
-        return Err(anyhow!("No OS provided"));
-    };
-    let is_windows = match os.as_str() {
-        "windows" => true,
-        "macos" => false,
-        _ => {
-            return Err(anyhow!("Invalid OS provided: {}", os));
-        }
-    };
-
     let start = time::Instant::now();
-    let errors = do_backup(is_windows);
+    let errors = do_backup();
     let dur = start.elapsed();
 
-    let os_pretty = if is_windows { "Windows" } else { "macOS" };
     let dur_pretty = pretty_duration(dur);
 
     if errors.is_empty() {
         log::info!("Completed in {dur_pretty}");
-        log::info!("Backup {os_pretty} succeeded");
+        log::info!("Backup succeeded");
         log::info!("Hope you're having a nice day :)");
     } else {
         let error_word = if errors.len() == 1 { "error" } else { "errors" };
         let joined_errors = errors.join("\n");
         log::info!("Completed in {dur_pretty}\n\n{joined_errors}");
-        log::error!("Backup {os_pretty} failed! {} {error_word}", errors.len());
+        log::error!("Backup failed! {} {error_word}", errors.len());
     }
 
     Ok(())
