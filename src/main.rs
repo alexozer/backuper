@@ -207,7 +207,7 @@ fn backup_filesystem_to(
     config: &ResticConfig,
     extra_restic_args: &[&str],
 ) -> anyhow::Result<()> {
-    let mut restic_args = vec!["restic", "backup", "--files-from", "-"];
+    let mut restic_args = vec!["restic", "backup", "--files-from", "-", "--exclude-caches"];
     restic_args.extend(extra_restic_args);
     restic_args.extend(gen_exclude_flags(EXCLUDE_PATTERNS));
 
