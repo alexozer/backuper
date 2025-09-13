@@ -245,7 +245,7 @@ fn do_backup() -> Vec<String> {
         let cloud_config = ResticConfig {
             name: "Cloud B2".into(),
             restic_repository: get_env_var("BACKUPER_AWS_REPOSITORY")?,
-            restic_password: get_env_var("BACKUPER_RESTIC_PASSWORD")?,
+            restic_password: get_env_var("BACKUPER_PASSWORD")?,
             aws_access_key_id: Some(get_env_var("BACKUPER_AWS_ACCESS_KEY_ID")?),
             aws_secret_access_key: Some(get_env_var("BACKUPER_AWS_SECRET_ACCESS_KEY")?),
         };
