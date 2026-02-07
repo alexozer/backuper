@@ -233,6 +233,12 @@ fn do_backup_macos(cloud_config: &ResticConfig, errors: &mut Vec<String>) {
     log::info!("Backup to '{}' complete", cloud_config.name);
 }
 
+fn do_beebox_backup() -> anyhow::Result<()> {
+    sh(&["ssh", "alex@beebox", "/home/alex/backup.sh"])
+        .show_output()
+        .run()
+}
+
 fn do_backup() -> Vec<String> {
     let any_to_cloud_config_func = || -> anyhow::Result<Vec<ResticConfig>> {
         let nas_config = ResticConfig {
@@ -261,6 +267,7 @@ fn do_backup() -> Vec<String> {
     for config in cloud_config {
         do_backup_macos(&config, &mut errors);
     }
+    try_task("Beebox Backup", do_beebox_backup, &mut errors);
     errors
 }
 
