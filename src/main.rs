@@ -1,26 +1,19 @@
 use anyhow::{Context, anyhow};
 use std::{
-    env,
-    io::Write,
-    process::{Command, Stdio},
-    time::{self, Duration},
+    env, io::Write, process::{Command, Stdio}, time::{self, Duration}
 };
 
 //
 // Start backup config
 //
 
-enum BackupDir<'a> {
-    Home(&'a str),
-}
-
-static MAC_BACKUP_DIRS: &[BackupDir] = &[
-    BackupDir::Home("Documents"),
-    BackupDir::Home("Pictures"),
-    BackupDir::Home("Music"),
-    BackupDir::Home("Movies"),
-    BackupDir::Home("Library/CloudStorage/Dropbox"),
-    BackupDir::Home("Library/Application Support/Anki2"),
+static MAC_BACKUP_DIRS: &[&str] = &[
+    "Documents",
+    "Pictures",
+    "Music",
+    "Movies",
+    "Library/CloudStorage/Dropbox",
+    "Library/Application Support/Anki2",
 ];
 
 static EXCLUDE_PATTERNS: &[&str] = &[
@@ -49,15 +42,13 @@ struct ResticConfig {
     aws_secret_access_key: Option<String>,
 }
 
-fn backup_dirs_to_strings(backup_dirs: &[BackupDir]) -> anyhow::Result<Vec<String>> {
+fn backup_dirs_to_strings(backup_dirs: &[&str]) -> anyhow::Result<Vec<String>> {
+    let home_dir = std::env::home_dir().ok_or(anyhow!("Failed to get home dir"))?;
     backup_dirs
         .iter()
-        .map(|d| match d {
-            BackupDir::Home(path_str) => {
-                let mut path = std::env::home_dir().ok_or(anyhow!("Failed to get home dir"))?;
-                path.push(path_str);
-                Ok(path.to_string_lossy().to_string())
-            }
+        .map(|path_str| {
+            let p = home_dir.join(path_str);
+            Ok(p.to_string_lossy().to_string())
         })
         .collect()
 }
@@ -136,6 +127,7 @@ impl<'a> ShBuilder<'a> {
             child = child.stdout(Stdio::inherit()).stderr(Stdio::inherit());
         } else {
             child = child.stdout(Stdio::piped()).stderr(Stdio::piped());
+            child.stdout(Stdio::piped()).stderr(Stdio::piped());
         }
         let mut child = child.spawn()?;
 
@@ -203,7 +195,7 @@ fn restic_config_to_env(config: &ResticConfig) -> Vec<(&str, &str)> {
 }
 
 fn backup_filesystem_to(
-    file_patterns: &[BackupDir],
+    file_patterns: &[&str],
     config: &ResticConfig,
     extra_restic_args: &[&str],
 ) -> anyhow::Result<()> {
