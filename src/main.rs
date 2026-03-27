@@ -1,4 +1,4 @@
-use anyhow::{Context, anyhow};
+use anyhow::{Context, bail};
 use std::{
     env, io::Write, process::{Command, Stdio}, time::{self, Duration}
 };
@@ -43,7 +43,7 @@ struct ResticConfig {
 }
 
 fn backup_dirs_to_strings(backup_dirs: &[&str]) -> anyhow::Result<Vec<String>> {
-    let home_dir = std::env::home_dir().ok_or(anyhow!("Failed to get home dir"))?;
+    let home_dir = std::env::home_dir().context("Failed to get home dir")?;
     backup_dirs
         .iter()
         .map(|path_str| {
@@ -135,14 +135,14 @@ impl<'a> ShBuilder<'a> {
         child
             .stdin
             .as_mut()
-            .ok_or(anyhow!("Failed to get stdin"))?
+            .context("Failed to get stdin")?
             .write_all(self.input.as_bytes())?;
 
         let output = child.wait_with_output()?;
 
         if !output.status.success() {
             let stderr_str = String::from_utf8(output.stderr)?;
-            return Err(anyhow!(stderr_str));
+            bail!(stderr_str);
         }
 
         Ok(())
