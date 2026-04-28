@@ -50,11 +50,11 @@ u64 NextPow2(u64 x) {
 // Arenas
 //
 
-typedef struct {
+struct Arena {
     void *data;
     u64 reserved;
     u64 offset;
-} Arena;
+};
 
 void _ArenaEnsureInit(Arena *arena) {
     if (arena->data == nullptr) {
@@ -95,22 +95,30 @@ void ArenaRelease(Arena *arena) {
     }
 }
 
-#define DefineArray(type) typedef struct { type *v; u64 count; } type##Array
-
 //
 // Vec
 //
 
-// Embedded into user defined array structs.
-#define _VecHeader_ struct { u64 count; u64 capacity; }
-typedef struct { u64 count; u64 capacity; } VecHeader;
+template <typename T>
+struct Arr {
+    T *v;
+    u64 n;
+};
+
+template <typename T>
+struct Vec {
+    T *v;
+    u64 n;
+    u64 cap;
+};
 
 #define MIN_VEC_CAPACITY 8
 
 #define VecHeaderCast(a) ((VecHeader *)(&a))
 #define VecItemSize(a) (sizeof(*(a).v))
 
-void *VecGrow(Arena *arena, VecHeader *header, void *array, u64 item_size, u64 count) {
+template <typename T>
+void *VecGrow(Arena *arena, Vec<T> *header, void *array, u64 item_size, u64 count) {
     const u64 old_size = header->count * item_size;
     const u64 new_size = (header->count + Max(count, MIN_VEC_CAPACITY)) * item_size;
 
@@ -139,22 +147,19 @@ void *VecGrow(Arena *arena, VecHeader *header, void *array, u64 item_size, u64 c
 // Strings
 //
 
-typedef struct {
-    u8 *data;
-    u64 size;
-} String;
+using String = Arr<u8>;
 
 // Yeah it's hiding a pointer behind, but it lets us make e.g. CStrArray
 typedef char *CStr;
 
-#define S(s) ((String){ .data = (u8 *)(s), .size = (sizeof(s)) - 1 })
+#define S(s) ((String){ .v = (u8 *)(s), .n = (sizeof(s)) - 1 })
 #define A(a, type_) ((type_##Array){ .v = a, .count = sizeof((a)) / sizeof(type_)})
 
 char *StrToC(Arena *arena, String s) {
-    char *cstr = (char *)ArenaPush(arena, s.size + 1);
+    char *cstr = (char *)ArenaPush(arena, s.n + 1);
     // Compiler plz vectorize
-    for (u64 i = 0; i < s.size; i++) {
-        cstr[i] = s.data[i];
+    for (u64 i = 0; i < s.n; i++) {
+        cstr[i] = s.v[i];
     }
     // Arena allocation is already zeroed, so null terminator is in place
     return cstr;
@@ -165,11 +170,11 @@ String StrFromCStr(char *cstr) {
     for (u64 i = 0; cstr[i] != '\0'; i++) {
         len++;
     }
-    return (String){.data = (u8 *)cstr, .size = len};
+    return (String){.v = (u8 *)cstr, .n = len};
 }
 
 bool StrIsEmpty(String s) {
-    return s.size == 0;
+    return s.n == 0;
 }
 
 // Returns a string from a utf8 byte buffer. Doesn't validate if it's actually utf8.
@@ -181,30 +186,7 @@ String StrFromBytes(void *buf, u64 size) {
         size -= 3;
     }
 
-    return (String){.data = s, .size = size};
-}
-
-typedef struct {
-    _VecHeader_;
-    String *v;
-} StringVec;
-
-void StrSplit(Arena *arena, String src, u8 delim, StringVec *out) {
-    u64 i = 0;
-    String substr = {.data = src.data, .size = 0};
-    while (i < src.size) {
-        if (src.data[i] == delim) {
-            VecPush(arena, *out, substr);
-            while (src.data[i] == delim) i++;
-            substr = (String){.data = src.data + i, .size = 0};
-        } else {
-            substr.size++;
-            i++;
-        }
-    }
-    if (substr.size > 0) {
-        VecPush(arena, *out, substr);
-    }
+    return (String){.v = s, .n = size};
 }
 
 // Super loose definition probably
@@ -214,22 +196,22 @@ bool CharIsWhitespace(u8 c) {
 
 String StrTrim(String s) {
     u64 start = 0;
-    while (start < s.size && CharIsWhitespace(s.data[start])) {
+    while (start < s.n && CharIsWhitespace(s.v[start])) {
         start++;
     }
 
-    i64 end = ((i64)s.size) - 1;
-    while (end >= 0 && CharIsWhitespace(s.data[end])) {
+    i64 end = ((i64)s.n) - 1;
+    while (end >= 0 && CharIsWhitespace(s.v[end])) {
         end--;
     }
     
-    return (String){.data = s.data + start, .size = (u64)(end + 1) - start};
+    return (String){.v = s.v + start, .n = (u64)(end + 1) - start};
 }
 
 String StrClone(Arena *arena, String s) {
-    void *data = ArenaPush(arena, s.size);
-    memcpy(data, s.data, s.size);
-    return (String){.data = data, .size = s.size};
+    void *data = ArenaPush(arena, s.n);
+    memcpy(data, s.v, s.n);
+    return (String){.v = data, .n = s.n};
 }
 
 bool StrStartsWith(String s, String prefix) {
@@ -241,20 +223,20 @@ bool StrEquals(String a, String b) {
 }
 
 // Certainly possible to do this simply and w/o an iterator object, but just messin around
-typedef struct {
+struct LineIter {
     String base;
     u64 pos;
-} LineIter;
+};
 
-LineIter StrIterLines(String s) {
-     return (LineIter){.base = s, .pos = 0};
+LineIter StrLines(String s) {
+     return (LineIter){ .base = s, .pos = 0 };
 }
 
-bool LineIterHasNext(LineIter* iter) {
-    return iter->pos < iter->base.size;
-}
+bool StrLinesNext(LineIter* iter, String *line) {
+    if (iter->pos >= iter->base.size) {
+        return false;
+    }
 
-String LineIterNext(LineIter* iter) {
     u64 line_start = iter->pos;
     u8 *data = iter->base.data;
     const u64 size = iter->base.size;
@@ -275,7 +257,13 @@ String LineIterNext(LineIter* iter) {
     }
 
     iter->pos = next_line_start;
-    return (String){.data = iter->base.data + line_start, .size = line_end - line_start};
+
+    if (line != nullptr) {
+        line->data = iter->base.data + line_start;
+        line->size = line_end - line_start;
+    }
+
+    return true;
 }
 
 u64 StrCountLines(String s) {
