@@ -12,7 +12,6 @@ static MAC_BACKUP_DIRS: &[&str] = &[
     "Pictures",
     "Music",
     "Movies",
-    "Library/CloudStorage/Dropbox",
     "Library/Application Support/Anki2",
 ];
 
