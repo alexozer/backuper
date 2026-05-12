@@ -5,7 +5,6 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
-#include <errno.h>
 #include <string.h>
 #include <spawn.h>
 
@@ -24,14 +23,14 @@ typedef double f64;
 // Math
 //
 
-#define Kilobytes(n) (n * 1024LL)
-#define Megabytes(n) (Kilobytes(n) * 1024LL)
+#define kilobytes(n) (n * 1024LL)
+#define megabytes(n) (kilobytes(n) * 1024LL)
 
-#define AlignTo(n, a) (((n) + (a - 1)) & ~(a - 1))
+#define align_to(n, a) (((n) + (a - 1)) & ~(a - 1))
 #define DEFAULT_ALIGNMENT 8
 
-#define Min(a, b) (((a) < (b)) ? a : b)
-#define Max(a, b) (((a) > (b)) ? a : b)
+#define min(a, b) (((a) < (b)) ? a : b)
+#define max(a, b) (((a) > (b)) ? a : b)
 
 // https://jameshfisher.com/2018/03/30/round-up-power-2/
 u64 NextPow2(u64 x) {
@@ -50,26 +49,32 @@ u64 NextPow2(u64 x) {
 // Arenas
 //
 
+template <typename T>
+struct Arr {
+    T *v;
+    u64 n;
+};
+
 struct Arena {
     void *data;
     u64 reserved;
     u64 offset;
 };
 
-void _ArenaEnsureInit(Arena *arena) {
+void _arena_ensure_init(Arena *arena) {
     if (arena->data == nullptr) {
-        const u64 data_size = Megabytes(16);
+        const u64 data_size = megabytes(16);
         arena->data = calloc(1, data_size);
         arena->reserved = data_size;
     }
 }
 
 // TODO deal with e.g. string nonalignment
-void *_ArenaPush(Arena *arena, u64 size, u64 alignment) {
-    _ArenaEnsureInit(arena);
+void *arena_push_bytes(Arena *arena, u64 size, u64 alignment = DEFAULT_ALIGNMENT) {
+    _arena_ensure_init(arena);
 
     void *pos = (void *)((u64)arena->data + arena->offset);
-    size = AlignTo(size, alignment);
+    size = align_to(size, alignment);
     arena->offset += size;
     if (arena->offset > arena->reserved) {
          fprintf(stderr, "Arena over!\n");
@@ -78,17 +83,20 @@ void *_ArenaPush(Arena *arena, u64 size, u64 alignment) {
     return pos;
 }
 
-#define ArenaPush(arena, size) (_ArenaPush((arena), size, DEFAULT_ALIGNMENT))
-#define ArenaPushStruct(arena, type) (((type)*)ArenaPush((arena), sizeof(type)))
-#define ArenaPushArray(arena, count_, type) \
-    ( \
-      (type##Array){ \
-      .v = _ArenaPush((arena), (count_) * sizeof(type), alignof(type)), \
-      .count = (count_), \
-      } \
-      )
+template <typename T>
+T *arena_push(Arena *arena) {
+    return arena_push_bytes(arena, sizeof(T));
+}
 
-void ArenaRelease(Arena *arena) {
+template <typename T>
+Arr<T> arena_push_arr(Arena *arena, u64 count) {
+    return {
+        .v = (T *)arena_push_bytes(arena, sizeof(T) * count),
+        .n = count,
+    };
+}
+
+void arena_release(Arena *arena) {
     if (arena->data != nullptr) {
         free(arena->data);
         *arena = (Arena){};
@@ -100,12 +108,6 @@ void ArenaRelease(Arena *arena) {
 //
 
 template <typename T>
-struct Arr {
-    T *v;
-    u64 n;
-};
-
-template <typename T>
 struct Vec {
     T *v;
     u64 n;
@@ -114,17 +116,14 @@ struct Vec {
 
 #define MIN_VEC_CAPACITY 8
 
-#define VecHeaderCast(a) ((VecHeader *)(&a))
-#define VecItemSize(a) (sizeof(*(a).v))
-
 template <typename T>
-void *VecGrow(Arena *arena, Vec<T> *header, void *array, u64 item_size, u64 count) {
-    const u64 old_size = header->count * item_size;
-    const u64 new_size = (header->count + Max(count, MIN_VEC_CAPACITY)) * item_size;
+void *_vec_grow(Arena *arena, Vec<T> *vec, void *array, u64 count) {
+    const u64 old_size = vec->count * sizeof(T);
+    const u64 new_size = (vec->count + max(count, MIN_VEC_CAPACITY)) * sizeof(T);
 
-    if (new_size > header->capacity) {
-        header->capacity = NextPow2(new_size);
-        void *new_array = ArenaPush(arena, header->capacity);
+    if (new_size > vec->capacity) {
+        vec->capacity = NextPow2(new_size);
+        void *new_array = ArenaPush(arena, vec->capacity);
         memcpy(new_array, array, old_size);
         return new_array;
     }
@@ -132,114 +131,103 @@ void *VecGrow(Arena *arena, Vec<T> *header, void *array, u64 item_size, u64 coun
     return array;
 }
 
-#define VecPush(arena, a, value) \
-    (*((void **)&(a).v) = VecGrow((arena), VecHeaderCast((a)), (a).v, VecItemSize((a)), 1), \
-     (a).v[(a).count++] = (value))
-
-#define VecExtend(arena, a, count, values) \
-    (*((void **)&(a).v) = VecGrow((arena), VecHeaderCast((a)), (a).v, VecItemSize((a)), count), \
-     memcpy((a).v, values, VecItemSize((a)) * count), \
-     (a).count += count)
-
-#define VecClear(a) ((a).size = 0)
-
 //
 // Strings
 //
 
-using String = Arr<u8>;
+using Str = Arr<u8>;
 
-// Yeah it's hiding a pointer behind, but it lets us make e.g. CStrArray
-typedef char *CStr;
+#define S(s) ((Str){ .v = (u8 *)(s), .n = (sizeof(s)) - 1 })
+#define A(a) { .v = (a), .n = sizeof((a)) / sizeof((a)[0]) }
 
-#define S(s) ((String){ .v = (u8 *)(s), .n = (sizeof(s)) - 1 })
-#define A(a, type_) ((type_##Array){ .v = a, .count = sizeof((a)) / sizeof(type_)})
-
-char *StrToC(Arena *arena, String s) {
-    char *cstr = (char *)ArenaPush(arena, s.n + 1);
+char *str_to_c(Arena *arena, Str s) {
+    Arr<char> cstr = arena_push_arr<char>(arena, s.n + 1);
     // Compiler plz vectorize
     for (u64 i = 0; i < s.n; i++) {
-        cstr[i] = s.v[i];
+        cstr.v[i] = s.v[i];
     }
     // Arena allocation is already zeroed, so null terminator is in place
-    return cstr;
+    return cstr.v;
 }
 
-String StrFromCStr(char *cstr) {
+Str str_from_cstr(char *cstr) {
     u64 len = 0;
     for (u64 i = 0; cstr[i] != '\0'; i++) {
         len++;
     }
-    return (String){.v = (u8 *)cstr, .n = len};
+    return (Str){ .v = (u8 *)cstr, .n = len };
 }
 
-bool StrIsEmpty(String s) {
+bool str_is_empty(Str s) {
     return s.n == 0;
 }
 
 // Returns a string from a utf8 byte buffer. Doesn't validate if it's actually utf8.
-String StrFromBytes(void *buf, u64 size) {
+Str str_from_bytes(Arr<u8> bytes) {
     // Skip utf8 BOM
-    u8 *s = (u8 *)buf;
+    u8 *s = bytes.v;
+    u64 size = bytes.n;
     if (size >= 3 && s[0] == u8'\xef' && s[1] == u8'\xbb' && s[2] == u8'\xbf') {
         s += 3;
         size -= 3;
     }
 
-    return (String){.v = s, .n = size};
+    return (Str){ .v = s, .n = size };
 }
 
 // Super loose definition probably
-bool CharIsWhitespace(u8 c) {
+bool char_is_whitespace(u8 c) {
     return c == u8' ' || c == u8'\r' || c == u8'\n';
 }
 
-String StrTrim(String s) {
+Str str_trim(Str s) {
     u64 start = 0;
-    while (start < s.n && CharIsWhitespace(s.v[start])) {
+    while (start < s.n && char_is_whitespace(s.v[start])) {
         start++;
     }
 
     i64 end = ((i64)s.n) - 1;
-    while (end >= 0 && CharIsWhitespace(s.v[end])) {
+    while (end >= 0 && char_is_whitespace(s.v[end])) {
         end--;
     }
     
-    return (String){.v = s.v + start, .n = (u64)(end + 1) - start};
+    return (Str){.v = s.v + start, .n = (u64)(end + 1) - start};
 }
 
-String StrClone(Arena *arena, String s) {
-    void *data = ArenaPush(arena, s.n);
-    memcpy(data, s.v, s.n);
-    return (String){.v = data, .n = s.n};
+Str str_clone(Arena *arena, Str s) {
+    Str clone = arena_push_arr<u8>(arena, s.n);
+    for (u64 i = 0; i < s.n; i++) {
+        clone.v[i] = s.v[i];
+    }
+    return clone;
 }
 
-bool StrStartsWith(String s, String prefix) {
-    return prefix.size <= s.size && memcmp(s.data, prefix.data, prefix.size) == 0;
+bool str_starts_with(Str s, Str prefix) {
+    return prefix.n <= s.n && memcmp(s.v, prefix.v, prefix.n) == 0;
 }
 
-bool StrEquals(String a, String b) {
-     return a.size == b.size && memcmp(a.data, b.data, a.size) == 0;
+bool str_equals(Str a, Str b) {
+     return a.n == b.n && memcmp(a.v, b.v, a.n) == 0;
 }
 
 // Certainly possible to do this simply and w/o an iterator object, but just messin around
-struct LineIter {
-    String base;
+struct StrLineIter {
+    Str base;
     u64 pos;
 };
 
-LineIter StrLines(String s) {
-     return (LineIter){ .base = s, .pos = 0 };
+StrLineIter str_lines(Str s) {
+     return (StrLineIter){ .base = s, .pos = 0 };
 }
 
-bool StrLinesNext(LineIter* iter, String *line) {
-    if (iter->pos >= iter->base.size) {
+bool str_lines_next(StrLineIter* iter, Str *line) {
+    if (iter->pos >= iter->base.n) {
         return false;
     }
 
     u64 line_start = iter->pos;
-    u8 *data = iter->base.data;
-    const u64 size = iter->base.size;
+    u8 *data = iter->base.v;
+    const u64 size = iter->base.n;
 
     // Advance until next line break
     u64 line_end = line_start;
@@ -259,66 +247,35 @@ bool StrLinesNext(LineIter* iter, String *line) {
     iter->pos = next_line_start;
 
     if (line != nullptr) {
-        line->data = iter->base.data + line_start;
-        line->size = line_end - line_start;
+        line->v = iter->base.v + line_start;
+        line->n = line_end - line_start;
     }
 
     return true;
 }
 
-u64 StrCountLines(String s) {
+u64 str_count_lines(Str s) {
     u64 line_count = 0;
-    LineIter iter = StrIterLines(s);
-    while (LineIterHasNext(&iter)) {
-        LineIterNext(&iter);
+    StrLineIter iter = str_lines(s);
+    while (str_lines_next(&iter, nullptr)) {
         line_count++;
     }
     return line_count;
 }
 
 //
-// mmap
-//
-
-// String MmapFileAsString(Arena *arena, String filepath) {
-//     char *filepath_cstr = StrToC(arena, filepath);
-//
-//     const i32 fd = open(filepath_cstr, O_RDONLY);
-//     if (fd == -1) {
-//         return (String){};
-//     }
-//     // Defer(arena /* , close(fd) */);
-//
-//     struct stat st;
-//     if (fstat(fd, &st) == -1) {
-//         return (String){};
-//     }
-//
-//     void *buf = mmap(nullptr, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
-//     if (buf == MAP_FAILED) {
-//         return (String){};
-//     }
-//     // Defer(arena /* munmap(buf, st.st_size) */);
-//
-//     return StrFromBytes(buf, st.st_size);
-// }
-
-//
 // Main
 //
 
-DefineArray(String);
-
-static String MacBackupDirs[] = {
+static Str MacBackupDirs[] = {
     S("Documents"),
     S("Pictures"),
     S("Music"),
     S("Movies"),
-    S("Library/CloudStorage/Dropbox"),
     S("Library/Application Support/Anki2"),
 };
 
-static String ExcludePatterns[] = {
+static Str ExcludePatterns[] = {
     S("node_modules/**"),
     S(".cache/**"),
     S(".vscode/**"),
@@ -332,41 +289,40 @@ static String ExcludePatterns[] = {
     S("target/release/**"),
 };
 
-typedef struct {
-    String name;
-    String restic_repository;
-    String restic_password;
-    String aws_access_key_id; // Optional
-    String aws_secret_access_key; // Optional
-} ResticConfig;
+struct ResticConfig {
+    Str name;
+    Str restic_repository;
+    Str restic_password;
+    Str aws_access_key_id; // Optional
+    Str aws_secret_access_key; // Optional
+};
 
 // Subprocesses
 
-typedef struct {
-    String name;
-    StringArray args;
-    StringArray env;
-} Cmd;
-
-DefineArray(CStr);
+struct Cmd {
+    Str name;
+    Arr<Str> args;
+    Arr<Str> env;
+};
 
 // TODO error handling, stdin
 void run_cmd(Cmd *cmd) {
     Arena scratch = {};
 
     pid_t pid;
-    CStr name = StrToC(&scratch, cmd->name);
+    char *name = str_to_c(&scratch, cmd->name);
     const posix_spawn_file_actions_t *file_actions = nullptr;
     const posix_spawnattr_t *attrp = nullptr;
 
-    CStrArray args = ArenaPushArray(&scratch, cmd->args.count + 1, CStr);
-    for (u64 i = 0; i < cmd->args.count; i++) {
-        args.v[i] = StrToC(&scratch, cmd->args.v[i]);
+    Arr<char *> args = arena_push_arr<char *>(&scratch, cmd->args.n + 2);
+    args.v[0] = name;
+    for (u64 i = 0; i < cmd->args.n; i++) {
+        args.v[i + 1] = str_to_c(&scratch, cmd->args.v[i]);
     }
 
-    CStrArray env = ArenaPushArray(&scratch, cmd->env.count + 1, CStr);
-    for (u64 i = 0; i < cmd->env.count; i++) {
-        env.v[i] = StrToC(&scratch, cmd->env.v[i]);
+    Arr<char *> env = arena_push_arr<char *>(&scratch, cmd->env.n + 1);
+    for (u64 i = 0; i < cmd->env.n; i++) {
+        env.v[i] = str_to_c(&scratch, cmd->env.v[i]);
     }
 
     int result = posix_spawnp(&pid, name, file_actions, attrp, args.v, env.v);
@@ -386,19 +342,27 @@ void run_cmd(Cmd *cmd) {
         exit(EXIT_FAILURE);
     }
 
-    ArenaRelease(&scratch);
+    arena_release(&scratch);
 }
 
 // Goal: count lines in file
 int main(int argc, char **argv) {
     Arena arena = {};
 
-    String env[] = (String[]) { S("PWD=something") };
+    Str env[] = { 
+        S("PWD=/Users/alex/Documents/repos/2023/backuper"),
+    };
+    Str args[] = {
+        S("-lh"),
+    };
     Cmd cmd = { 
         .name = S("ls"),
-        .env = A(env, String),
+        .args = A(args),
+        .env = A(env),
     };
     run_cmd(&cmd);
+    
+    arena_release(&arena);
 
     return EXIT_SUCCESS;
 }
