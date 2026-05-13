@@ -444,26 +444,20 @@ struct ResticConfig {
     Str aws_secret_access_key; // Optional
 };
 
-Arr<Pair<Str, Str>> parse_env(Arena *arena, char **envp) {
-    Arr<char *> cstr_arr = arr_from_null_terminated<char *>(envp);
-    Arr<Pair<Str, Str>> pair_arr = arena_push_arr<Pair<Str, Str>>(arena, cstr_arr.n);
-    for (u64 i = 0; i < pair_arr.n; i++) {
-        Str env_var = str_from_c(envp[i]);
-        pair_arr.v[i] = str_split2(env_var, C('='));
-    }
-    return pair_arr;
-}
+Str env_get(Str key) {
+    Arena scratch = {};
 
-// Yeah immature to not use map, but probably almost never slower anyway
-Str env_get(Arr<Pair<Str, Str>> env, Str var_name) {
-    for (u64 i = 0; i < env.n; i++) {
-        Str name = env.v[i].left;
-        Str value = env.v[i].right;
-        if (str_eq(name, var_name)) {
-            return value;
-        }
+    char *key_cstr = str_to_c(&scratch, key);
+    char *value_cstr = getenv(key_cstr);
+
+    Str result = {};
+    if (value_cstr != nullptr) {
+        result = str_from_c(value_cstr);
     }
-    return {};
+
+    arena_release(&scratch);
+
+    return result;
 }
 
 Arr<ResticConfig> get_restic_configs(Arena *arena, Arr<Pair<Str, Str>> env) {
@@ -471,15 +465,15 @@ Arr<ResticConfig> get_restic_configs(Arena *arena, Arr<Pair<Str, Str>> env) {
 
     ResticConfig *nas_config = vec_push(arena, &configs, ResticConfig{});
     nas_config->name = S("NAS REST");
-    nas_config->restic_repository = env_get(env, S("BACKUPER_NAS_REPOSITORY"));
-    nas_config->restic_password = env_get(env, S("BACKUPER_PASSWORD"));
+    nas_config->restic_repository = env_get(S("BACKUPER_NAS_REPOSITORY"));
+    nas_config->restic_password = env_get(S("BACKUPER_PASSWORD"));
 
     ResticConfig *cloud_config = vec_push(arena, &configs, ResticConfig{});
     cloud_config->name = S("Cloud B2");
-    cloud_config->restic_repository = env_get(env, S("BACKUPER_AWS_REPOSITORY"));
-    cloud_config->restic_password = env_get(env, S("BACKUPER_PASSWORD"));
-    cloud_config->aws_access_key_id = env_get(env, S("BACKUPER_AWS_ACCESS_KEY_ID"));
-    cloud_config->aws_secret_access_key = env_get(env, S("BACKUPER_AWS_SECRET_ACCESS_KEY"));
+    cloud_config->restic_repository = env_get(S("BACKUPER_AWS_REPOSITORY"));
+    cloud_config->restic_password = env_get(S("BACKUPER_PASSWORD"));
+    cloud_config->aws_access_key_id = env_get(S("BACKUPER_AWS_ACCESS_KEY_ID"));
+    cloud_config->aws_secret_access_key = env_get(S("BACKUPER_AWS_SECRET_ACCESS_KEY"));
 
     return vec_arr(&configs);
 }
@@ -488,10 +482,8 @@ Arr<ResticConfig> get_restic_configs(Arena *arena, Arr<Pair<Str, Str>> env) {
 int main(int argc, char **argv, char **envp) {
     Arena arena = {};
 
-    Arr<Pair<Str, Str>> env = parse_env(&arena, envp);
-
     Pair<Str, Str> basic_env[] = {
-        { S("HOME"), env_get(env, S("HOME")) },
+        { S("HOME"), env_get(S("HOME")) },
     };
 
     {
