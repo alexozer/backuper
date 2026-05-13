@@ -460,7 +460,7 @@ Str env_get(Str key) {
     return result;
 }
 
-Arr<ResticConfig> get_restic_configs(Arena *arena, Arr<Pair<Str, Str>> env) {
+Arr<ResticConfig> get_restic_configs(Arena *arena) {
     Vec<ResticConfig> configs = {};
 
     ResticConfig *nas_config = vec_push(arena, &configs, ResticConfig{});
@@ -478,38 +478,49 @@ Arr<ResticConfig> get_restic_configs(Arena *arena, Arr<Pair<Str, Str>> env) {
     return vec_arr(&configs);
 }
 
+Arr<Pair<Str, Str>> restic_config_to_env(Arena *arena, ResticConfig *config) {
+    Vec<Pair<Str, Str>> env = {};
+
+    vec_push(arena, &env, { S("RESTIC_REPOSITORY"), config->restic_repository });
+    vec_push(arena, &env, { S("RESTIC_PASSWORD"), config->restic_password });
+    if (!str_is_empty(config->aws_access_key_id)) {
+        vec_push(arena, &env, { S("AWS_ACCESS_KEY_ID"), config->aws_access_key_id });
+    }
+    if (!str_is_empty(config->aws_secret_access_key)) {
+        vec_push(arena, &env, { S("AWS_SECRET_ACCESS_KEY"), config->aws_secret_access_key });
+    }
+
+    return vec_arr(&env);
+}
+
+void do_upgrade() {
+    Pair<Str, Str> basic_env[] = {
+        { S("HOME"), env_get(S("HOME")) },
+        { S("USER"), env_get(S("USER")) },
+    };
+
+    Str args[] = { S("upgrade") };
+    Cmd cmd = { 
+        .name = S("brew"), 
+        .args = A(args),
+        .env = A(basic_env),
+    };
+    run_cmd(&cmd);
+}
+
 // Goal: count lines in file
 int main(int argc, char **argv, char **envp) {
     Arena arena = {};
 
-    Pair<Str, Str> basic_env[] = {
-        { S("HOME"), env_get(S("HOME")) },
-    };
+    do_upgrade();
 
-    {
-        Str args[] = {
-            S("-lh"),
-            S("--color=always"),
-        };
-        Cmd cmd = { 
-            .name = S("ls"),
-            .args = A(args),
-            .env = A(basic_env),
-        };
-        run_cmd(&cmd);
-    }
-
-    {
-        Str args[] = { S("upgrade") };
-        Cmd cmd = { 
-            .name = S("brew"), 
-            .args = A(args),
-            .env = A(basic_env),
-        };
-        run_cmd(&cmd);
+    Arr<ResticConfig> configs = get_restic_configs(&arena);
+    printf("Restic configs:\n");
+    for (u64 i = 0; i < configs.n; i++) {
+        char *name_cstr = str_to_c(&arena, configs.v[i].name);
+        printf("Name: %s\n", name_cstr);
     }
      
     arena_release(&arena);
-
     return EXIT_SUCCESS;
 }
