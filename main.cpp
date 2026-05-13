@@ -187,7 +187,7 @@ Str str_trim(Str s) {
     while (end >= 0 && char_is_whitespace(s.v[end])) {
         end--;
     }
-    
+
     return (Str){.v = s.v + start, .n = (u64)(end + 1) - start};
 }
 
@@ -271,6 +271,10 @@ Pair<Str, Str> str_split2(Str base, u8 delim) {
         result.right = arr_slice(base, delim_idx + 1, base.n);
     }
     return result;
+}
+
+bool str_eq(Str a, Str b) {
+    return a.n == b.n && memcmp(a.v, b.v, a.n) == 0;
 }
 
 //
@@ -386,8 +390,7 @@ void run_cmd(Cmd *cmd) {
         env.v[i] = str_to_c(&scratch, vec_arr(&line));
     }
 
-    // int result = posix_spawnp(&pid, name, file_actions, attrp, args.v, env.v);
-    int result = posix_spawnp(&pid, name, file_actions, attrp, args.v, nullptr);
+    int result = posix_spawnp(&pid, name, file_actions, attrp, args.v, env.v);
     if (result != 0) {
         fprintf(stderr, "Failed to posix_spawnp: code %d\n", result);
         exit(EXIT_FAILURE);
@@ -441,49 +444,65 @@ struct ResticConfig {
     Str aws_secret_access_key; // Optional
 };
 
-Arr<ResticConfig> get_restic_configs(Arena *arena, Map<Str, Str> *env) {
+Arr<Pair<Str, Str>> parse_env(Arena *arena, char **envp) {
+    Arr<char *> cstr_arr = arr_from_null_terminated<char *>(envp);
+    Arr<Pair<Str, Str>> pair_arr = arena_push_arr<Pair<Str, Str>>(arena, cstr_arr.n);
+    for (u64 i = 0; i < pair_arr.n; i++) {
+        Str env_var = str_from_c(envp[i]);
+        pair_arr.v[i] = str_split2(env_var, C('='));
+    }
+    return pair_arr;
+}
+
+// Yeah immature to not use map, but probably almost never slower anyway
+Str env_get(Arr<Pair<Str, Str>> env, Str var_name) {
+    for (u64 i = 0; i < env.n; i++) {
+        Str name = env.v[i].left;
+        Str value = env.v[i].right;
+        if (str_eq(name, var_name)) {
+            return value;
+        }
+    }
+    return {};
+}
+
+Arr<ResticConfig> get_restic_configs(Arena *arena, Arr<Pair<Str, Str>> env) {
     Vec<ResticConfig> configs = {};
 
     ResticConfig *nas_config = vec_push(arena, &configs, ResticConfig{});
     nas_config->name = S("NAS REST");
-    nas_config->restic_repository = map_get(env, S("BACKUPER_NAS_REPOSITORY"));
-    nas_config->restic_password = map_get(env, S("BACKUPER_PASSWORD"));
+    nas_config->restic_repository = env_get(env, S("BACKUPER_NAS_REPOSITORY"));
+    nas_config->restic_password = env_get(env, S("BACKUPER_PASSWORD"));
 
     ResticConfig *cloud_config = vec_push(arena, &configs, ResticConfig{});
     cloud_config->name = S("Cloud B2");
-    cloud_config->restic_repository = map_get(env, S("BACKUPER_AWS_REPOSITORY"));
-    cloud_config->restic_password = map_get(env, S("BACKUPER_PASSWORD"));
-    cloud_config->aws_access_key_id = map_get(env, S("BACKUPER_AWS_ACCESS_KEY_ID"));
-    cloud_config->aws_secret_access_key = map_get(env, S("BACKUPER_AWS_SECRET_ACCESS_KEY"));
+    cloud_config->restic_repository = env_get(env, S("BACKUPER_AWS_REPOSITORY"));
+    cloud_config->restic_password = env_get(env, S("BACKUPER_PASSWORD"));
+    cloud_config->aws_access_key_id = env_get(env, S("BACKUPER_AWS_ACCESS_KEY_ID"));
+    cloud_config->aws_secret_access_key = env_get(env, S("BACKUPER_AWS_SECRET_ACCESS_KEY"));
 
     return vec_arr(&configs);
-}
-
-Map<Str, Str> make_env_map(Arena *arena, char **envp) {
-    Map<Str, Str> env = {};
-    for (u64 i = 0; envp[i] != nullptr; i++) {
-        Str env_var = str_from_c(envp[i]);
-        Pair<Str, Str> split = str_split2(env_var, C('='));
-        map_set(arena, &env, split.left, split.right);
-    }
-    return env;
 }
 
 // Goal: count lines in file
 int main(int argc, char **argv, char **envp) {
     Arena arena = {};
 
-    Map<Str, Str> env = make_env_map(&arena, envp);
+    Arr<Pair<Str, Str>> env = parse_env(&arena, envp);
+
+    Pair<Str, Str> basic_env[] = {
+        { S("HOME"), env_get(env, S("HOME")) },
+    };
 
     {
         Str args[] = {
             S("-lh"),
-            S("--color=auto"),
+            S("--color=always"),
         };
         Cmd cmd = { 
             .name = S("ls"),
             .args = A(args),
-            .env = map_entries(&env),
+            .env = A(basic_env),
         };
         run_cmd(&cmd);
     }
@@ -493,11 +512,11 @@ int main(int argc, char **argv, char **envp) {
         Cmd cmd = { 
             .name = S("brew"), 
             .args = A(args),
-            .env = map_entries(&env),
+            .env = A(basic_env),
         };
         run_cmd(&cmd);
     }
-    
+     
     arena_release(&arena);
 
     return EXIT_SUCCESS;
