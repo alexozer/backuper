@@ -116,14 +116,14 @@ void arena_release(Arena *arena) {
 
 template <typename T>
 Arr<T> arr_from_null_terminated(T *v) {
-    u64 n = 0;
-    while (v[n] != nullptr) n++;
-    return { .v = v, .n = n };
+    u64 count = 0;
+    while (v[count] != nullptr) count++;
+    return { .value = v, .count = count };
 }
 
 template <typename T>
 Arr<T> arr_slice(Arr<T> arr, u64 start, u64 end) {
-    if (start >= arr.count || end > arr.count || end < start) {
+    if (start > arr.count || end > arr.count || end < start) {
         fprintf(stderr, "Invalid array slice: count = %lld, start = %lld, end = %lld\n", arr.count, start, end);
         exit(EXIT_FAILURE);
     }
@@ -175,6 +175,10 @@ struct Pair {
 //
 
 using Str = Arr<u8>;
+
+// Str operator ""_s(const char* s, unsigned long count) {
+//     return (Str) { .value = (u8 *)(s), .count = count };
+// }
 
 #define S(s) ((Str){ .value = (u8 *)(s), .count = (sizeof(s)) - 1 })
 #define C(c) ((u8)(c))
@@ -371,6 +375,24 @@ Arr<T> vec_arr(Vec<T> *vec) {
 }
 
 //
+// Paths
+//
+
+Str path_join(Arena *arena, Str left_path, Str right_path) {
+    if (arr_is_empty(left_path)) {
+        return right_path;
+    }
+    if (arr_is_empty(right_path)) {
+        return left_path;
+    }
+    Vec<u8> joined = {};
+    vec_extend(arena, &joined, left_path);
+    vec_push(arena, &joined, C('/'));
+    vec_extend(arena, &joined, right_path);
+    return vec_arr(&joined);
+}
+
+//
 // Maps
 //
 
@@ -399,48 +421,101 @@ Arr<T> vec_arr(Vec<T> *vec) {
 
 // Subprocesses
 
+Str env_get(Str key) {
+    Arena scratch = {};
+
+    char *key_cstr = str_to_c(&scratch, key);
+    char *value_cstr = getenv(key_cstr);
+
+    Str result = {};
+    if (value_cstr != nullptr) {
+        result = str_from_c(value_cstr);
+    }
+
+    arena_release(&scratch);
+
+    return result;
+}
+
 struct Cmd {
     Str name;
     Arr<Str> args;
     Arr<Pair<Str, Str>> env;
+    Arr<u8> input;
 };
 
-// TODO error handling, stdin
-void run_cmd(Cmd *cmd) {
-    Arena scratch = {};
-
-    pid_t pid;
-    char *name = str_to_c(&scratch, cmd->name);
-    const posix_spawn_file_actions_t *file_actions = nullptr;
-    const posix_spawnattr_t *attrp = nullptr;
-
-    Arr<char *> args = arena_push_arr<char *>(&scratch, cmd->args.count + 2);
+Arr<char *> cmd__build_args(Arena *arena, Cmd *cmd) {
+    Arr<char *> args = arena_push_arr<char *>(arena, cmd->args.count + 2);
+    char *name = str_to_c(arena, cmd->name);
     args[0] = name;
     for (u64 i = 0; i < cmd->args.count; i++) {
-        args[i + 1] = str_to_c(&scratch, cmd->args[i]);
+        args[i + 1] = str_to_c(arena, cmd->args[i]);
     }
+    return args;
+}
 
-    Arr<char *> env = arena_push_arr<char *>(&scratch, cmd->env.count + 1);
-    for (u64 i = 0; i < cmd->env.count; i++) {
-        Str var = cmd->env[i].left;
-        Str val = cmd->env[i].right;
+Arr<char *> cmd__build_env(Arena *arena, Cmd *cmd) {
+    Vec<char *> env = {};
+
+    Vec<Pair<Str, Str>> pairs = {};
+    vec_extend(arena, &pairs, cmd->env);
+    vec_push(arena, &pairs, { S("HOME"), env_get(S("HOME")) });
+    vec_push(arena, &pairs, { S("PATH"), env_get(S("PATH")) });
+    vec_push(arena, &pairs, { S("USER"), env_get(S("USER")) });
+
+    for (u64 i = 0; i < pairs.count; i++) {
+        Str var = pairs[i].left;
+        Str val = pairs[i].right;
 
         // Build "{var}={val}"
         Vec<u8> line = {};
-        vec_extend(&scratch, &line, var);
-        vec_push(&scratch, &line, C('='));
-        vec_extend(&scratch, &line, val);
+        vec_extend(arena, &line, var);
+        vec_push(arena, &line, C('='));
+        vec_extend(arena, &line, val);
+        vec_push(arena, &line, C('\0'));
 
-        env[i] = str_to_c(&scratch, vec_arr(&line));
+        vec_push(arena, &env, (char *)line.value);
+    }
+    vec_push(arena, &env, (char *)nullptr);
+
+    return vec_arr(&env);
+}
+
+// TODO error reporting
+void cmd_run(Cmd *cmd) {
+    Arena scratch = {};
+
+    Arr<char *> args = cmd__build_args(&scratch, cmd);
+    Arr<char *> env = cmd__build_env(&scratch, cmd);
+
+    const bool provide_stdin = !arr_is_empty(cmd->input);
+    int stdin_pipe[2] = { -1, -1 };
+    posix_spawn_file_actions_t actions = {};
+    posix_spawn_file_actions_init(&actions);
+
+    if (provide_stdin) {
+        pipe(stdin_pipe);
+        posix_spawn_file_actions_addclose(&actions, stdin_pipe[1]);
+        posix_spawn_file_actions_adddup2(&actions, stdin_pipe[0], STDIN_FILENO);
+        posix_spawn_file_actions_addclose(&actions, stdin_pipe[0]);
     }
 
-    int result = posix_spawnp(&pid, name, file_actions, attrp, args.value, env.value);
+    pid_t pid = -1;
+    const posix_spawnattr_t *attrp = nullptr;
+    char *name = str_to_c(&scratch, cmd->name);
+    int result = posix_spawnp(&pid, name, &actions, attrp, args.value, env.value);
     if (result != 0) {
-        fprintf(stderr, "Failed to posix_spawnp: code %d\n", result);
+        fprintf(stderr, "Failed to invoke posix_spawnp: code %d\n", result);
         exit(EXIT_FAILURE);
     }
 
-    int status;
+    if (provide_stdin) {
+        close(stdin_pipe[0]);
+        write(stdin_pipe[1], cmd->input.value, cmd->input.count);
+        close(stdin_pipe[1]);
+    }
+
+    int status = 0;
     waitpid(pid, &status, 0);
     if (!WIFEXITED(status)) {
         fprintf(stderr, "Subprocess '%s' didn't exit normally\n", name);
@@ -451,6 +526,8 @@ void run_cmd(Cmd *cmd) {
         exit(EXIT_FAILURE);
     }
 
+    posix_spawn_file_actions_destroy(&actions);
+
     arena_release(&scratch);
 }
 
@@ -458,7 +535,9 @@ void run_cmd(Cmd *cmd) {
 // Main
 //
 
-static Str MacBackupDirs[] = {
+Arr<char *> g_envp;
+
+static Str MAC_BACKUP_DIRS[] = {
     S("Documents"),
     S("Pictures"),
     S("Music"),
@@ -466,7 +545,7 @@ static Str MacBackupDirs[] = {
     S("Library/Application Support/Anki2"),
 };
 
-static Str ExcludePatterns[] = {
+static Str EXCLUDE_PATTERNS[] = {
     S("node_modules/**"),
     S(".cache/**"),
     S(".vscode/**"),
@@ -488,22 +567,6 @@ struct ResticConfig {
     Str aws_secret_access_key; // Optional
 };
 
-Str env_get(Str key) {
-    Arena scratch = {};
-
-    char *key_cstr = str_to_c(&scratch, key);
-    char *value_cstr = getenv(key_cstr);
-
-    Str result = {};
-    if (value_cstr != nullptr) {
-        result = str_from_c(value_cstr);
-    }
-
-    arena_release(&scratch);
-
-    return result;
-}
-
 Arr<ResticConfig> get_restic_configs(Arena *arena) {
     Vec<ResticConfig> configs = {};
 
@@ -522,52 +585,87 @@ Arr<ResticConfig> get_restic_configs(Arena *arena) {
     return vec_arr(&configs);
 }
 
-Arr<Pair<Str, Str>> restic_config_to_env(Arena *arena, ResticConfig *config) {
-    Vec<Pair<Str, Str>> env = {};
-
-    vec_push(arena, &env, { S("RESTIC_REPOSITORY"), config->restic_repository });
-    vec_push(arena, &env, { S("RESTIC_PASSWORD"), config->restic_password });
-    if (!arr_is_empty(config->aws_access_key_id)) {
-        vec_push(arena, &env, { S("AWS_ACCESS_KEY_ID"), config->aws_access_key_id });
-    }
-    if (!arr_is_empty(config->aws_secret_access_key)) {
-        vec_push(arena, &env, { S("AWS_SECRET_ACCESS_KEY"), config->aws_secret_access_key });
-    }
-
-    return vec_arr(&env);
-}
-
 void do_upgrade() {
-    Pair<Str, Str> basic_env[] = {
-        { S("HOME"), env_get(S("HOME")) },
-        { S("USER"), env_get(S("USER")) },
-    };
-
     Str args[] = { S("upgrade") };
     Cmd cmd = { 
         .name = S("brew"), 
         .args = A(args),
-        .env = A(basic_env),
     };
-    run_cmd(&cmd);
+    cmd_run(&cmd);
+}
+
+void backup_filesystem_to(
+    Arr<Str> file_patterns,
+    ResticConfig *config,
+    Arr<Str> extra_restic_args
+) {
+    Arena scratch = {};
+
+    printf("Backup to '%s' started", str_to_c(&scratch, config->name));
+
+    // Build args
+    Str base_restic_args[] = { 
+        S("backup"), 
+        S("--files-from"), S("-"), 
+        S("--exclude-caches"),
+    };
+    Vec<Str> restic_args = {};
+    vec_extend(&scratch, &restic_args, A(base_restic_args));
+    vec_extend(&scratch, &restic_args, extra_restic_args);
+
+    Arr<Str> excludes = A(EXCLUDE_PATTERNS);
+    for (u64 i = 0; i < excludes.count; i++) {
+        vec_push(&scratch, &restic_args, S("--exclude"));
+        vec_push(&scratch, &restic_args, excludes[i]);
+    }
+
+    // Build env
+    Vec<Pair<Str, Str>> env = {};
+    vec_push(&scratch, &env, { S("RESTIC_REPOSITORY"), config->restic_repository });
+    vec_push(&scratch, &env, { S("RESTIC_PASSWORD"), config->restic_password });
+    if (!arr_is_empty(config->aws_access_key_id)) {
+        vec_push(&scratch, &env, { S("AWS_ACCESS_KEY_ID"), config->aws_access_key_id });
+    }
+    if (!arr_is_empty(config->aws_secret_access_key)) {
+        vec_push(&scratch, &env, { S("AWS_SECRET_ACCESS_KEY"), config->aws_secret_access_key });
+    }
+
+    // Build file input list (stdin)
+    Vec<u8> abs_file_patterns = {};
+    Str home = env_get(S("HOME"));
+    for (u64 i = 0; i < file_patterns.count; i++) {
+        Str joined = path_join(&scratch, home, file_patterns[i]);
+        vec_extend(&scratch, &abs_file_patterns, joined);
+        vec_push(&scratch, &abs_file_patterns, C('\n'));
+    }
+
+    Cmd restic_cmd = {
+        .name = S("restic"),
+        .args = vec_arr(&restic_args),
+        .env = vec_arr(&env),
+        .input = vec_arr(&abs_file_patterns),
+    };
+    cmd_run(&restic_cmd);
+
+    printf("Backup to '%s' complete", str_to_c(&scratch, config->name));
+
+    arena_release(&scratch);
 }
 
 // Goal: count lines in file
 int main(int argc, char **argv, char **envp) {
+    g_envp = arr_from_null_terminated(envp);
+
     Arena arena = {};
 
-    do_upgrade();
+    // do_upgrade();
 
     Arr<ResticConfig> configs = get_restic_configs(&arena);
-    printf("Restic configs:\n");
+    Str extra_restic_args[] = { S("--tag"), S("macos") };
     for (u64 i = 0; i < configs.count; i++) {
-        printf("\n");
-        char *name_cstr = str_to_c(&arena, configs[i].name);
-        char *repo_cstr = str_to_c(&arena, configs[i].restic_repository);
-        printf("Name: %s\n", name_cstr);
-        printf("Repo: %s\n", repo_cstr);
+        backup_filesystem_to(A(MAC_BACKUP_DIRS), &configs[i], A(extra_restic_args));
     }
-     
+
     arena_release(&arena);
     return EXIT_SUCCESS;
 }
