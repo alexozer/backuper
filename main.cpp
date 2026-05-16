@@ -498,6 +498,8 @@ void cmd_run(Cmd *cmd) {
         posix_spawn_file_actions_addclose(&actions, stdin_pipe[1]);
         posix_spawn_file_actions_adddup2(&actions, stdin_pipe[0], STDIN_FILENO);
         posix_spawn_file_actions_addclose(&actions, stdin_pipe[0]);
+    } else {
+        posix_spawn_file_actions_addclose(&actions, STDIN_FILENO);
     }
 
     pid_t pid = -1;
