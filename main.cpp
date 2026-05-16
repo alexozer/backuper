@@ -5,7 +5,6 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
-#include <string.h>
 #include <spawn.h>
 
 typedef uint8_t u8;
@@ -33,7 +32,7 @@ typedef double f64;
 #define max(a, b) (((a) > (b)) ? a : b)
 
 // https://jameshfisher.com/2018/03/30/round-up-power-2/
-u64 next_pow2(u64 x) {
+constexpr u64 next_pow2(u64 x) {
     x--;
     x |= x>>1;
     x |= x>>2;
@@ -51,8 +50,16 @@ u64 next_pow2(u64 x) {
 
 template <typename T>
 struct Arr {
-    T *v;
-    u64 n;
+    T *value;
+    u64 count;
+
+    T& operator[](u64 i) {
+        if (i >= count) {
+            fprintf(stderr, "Bounds check fail! i = %lld, count = %lld\n", i, count);
+            exit(EXIT_FAILURE);
+        }
+        return value[i];
+    }
 };
 
 struct Arena {
@@ -91,8 +98,8 @@ T *arena_push(Arena *arena) {
 template <typename T>
 Arr<T> arena_push_arr(Arena *arena, u64 count) {
     return {
-        .v = (T *)arena_push_bytes(arena, sizeof(T) * count),
-        .n = count,
+        .value = (T *)arena_push_bytes(arena, sizeof(T) * count),
+        .count = count,
     };
 }
 
@@ -116,10 +123,44 @@ Arr<T> arr_from_null_terminated(T *v) {
 
 template <typename T>
 Arr<T> arr_slice(Arr<T> arr, u64 start, u64 end) {
+    if (start >= arr.count || end > arr.count || end < start) {
+        fprintf(stderr, "Invalid array slice: count = %lld, start = %lld, end = %lld\n", arr.count, start, end);
+        exit(EXIT_FAILURE);
+    }
+
     return {
-        .v = arr.v + start,
-        .n = end - start,
+        .value = arr.value + start,
+        .count = end - start,
     };
+}
+
+template <typename T>
+bool arr_eq(Arr<T> a, Arr<T> b) {
+    if (a.count != b.count) {
+        return false;
+    }
+    for (u64 i = 0; i < a.count; i++) {
+        if (a[i] != b[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+template <typename T>
+void arr_copy(Arr<T> dest, Arr<T> source) {
+    if (dest.count != source.count) {
+        fprintf(stderr, "Unequal array lengths: dest = %lld, source = %lld\n", dest.count, source.count);
+        exit(EXIT_FAILURE);
+    }
+    for (u64 i = 0; i < dest.count; i++) {
+        dest[i] = source[i];
+    }
+}
+
+template <typename T>
+bool arr_is_empty(Arr<T> arr) {
+    return arr.count == 0;
 }
 
 // May come to regret this...
@@ -135,76 +176,70 @@ struct Pair {
 
 using Str = Arr<u8>;
 
-#define S(s) ((Str){ .v = (u8 *)(s), .n = (sizeof(s)) - 1 })
+#define S(s) ((Str){ .value = (u8 *)(s), .count = (sizeof(s)) - 1 })
 #define C(c) ((u8)(c))
-#define A(a) { .v = (a), .n = sizeof((a)) / sizeof((a)[0]) }
+#define A(a) { .value = (a), .count = sizeof((a)) / sizeof((a)[0]) }
 
 char *str_to_c(Arena *arena, Str s) {
-    Arr<char> cstr = arena_push_arr<char>(arena, s.n + 1);
+    Arr<char> cstr = arena_push_arr<char>(arena, s.count + 1);
     // Compiler plz vectorize
-    for (u64 i = 0; i < s.n; i++) {
-        cstr.v[i] = s.v[i];
+    for (u64 i = 0; i < s.count; i++) {
+        cstr[i] = s[i];
     }
     // Arena allocation is already zeroed, so null terminator is in place
-    return cstr.v;
+    return cstr.value;
 }
 
 Str str_from_c(char *cstr) {
-    u64 n = 0;
-    while (cstr[n] != '\0') n++;
-    return (Str){ .v = (u8 *)cstr, .n = n };
-}
-
-bool str_is_empty(Str s) {
-    return s.n == 0;
+    u64 count = 0;
+    while (cstr[count] != '\0') count++;
+    return (Str){ .value = (u8 *)cstr, .count = count };
 }
 
 // Returns a string from a utf8 byte buffer. Doesn't validate if it's actually utf8.
 Str str_from_bytes(Arr<u8> bytes) {
     // Skip utf8 BOM
-    u8 *s = bytes.v;
-    u64 size = bytes.n;
-    if (size >= 3 && s[0] == C('\xef') && s[1] == C('\xbb') && s[2] == C('\xbf')) {
-        s += 3;
-        size -= 3;
+    u64 start = 0;
+    if (bytes.count >= 3 && bytes[0] == C('\xef') && bytes[1] == C('\xbb') && bytes[2] == C('\xbf')) {
+        start = 3;
     }
 
-    return (Str){ .v = (u8 *)s, .n = size };
+    return arr_slice(bytes, start, bytes.count);
 }
 
-// Super loose definition probably
+// Super conservative definition probably
 bool char_is_whitespace(u8 c) {
     return c == C(' ') || c == C('\r') || c == C('\n');
 }
 
 Str str_trim(Str s) {
     u64 start = 0;
-    while (start < s.n && char_is_whitespace(s.v[start])) {
+    while (start < s.count && char_is_whitespace(s[start])) {
         start++;
     }
 
-    i64 end = ((i64)s.n) - 1;
-    while (end >= 0 && char_is_whitespace(s.v[end])) {
+    i64 end = ((i64)s.count) - 1;
+    while (end >= 0 && char_is_whitespace(s[end])) {
         end--;
     }
 
-    return (Str){.v = s.v + start, .n = (u64)(end + 1) - start};
+    return arr_slice(s, start, end);
 }
 
 Str str_clone(Arena *arena, Str s) {
-    Str clone = arena_push_arr<u8>(arena, s.n);
-    for (u64 i = 0; i < s.n; i++) {
-        clone.v[i] = s.v[i];
+    Str clone = arena_push_arr<u8>(arena, s.count);
+    for (u64 i = 0; i < s.count; i++) {
+        clone[i] = s[i];
     }
     return clone;
 }
 
 bool str_starts_with(Str s, Str prefix) {
-    return prefix.n <= s.n && memcmp(s.v, prefix.v, prefix.n) == 0;
-}
-
-bool str_equals(Str a, Str b) {
-     return a.n == b.n && memcmp(a.v, b.v, a.n) == 0;
+    if (prefix.count > s.count) {
+        return false;
+    }
+    Str s_prefix = arr_slice(s, 0, prefix.count);
+    return arr_eq(prefix, s_prefix);
 }
 
 // Certainly possible to do this simply and w/o an iterator object, but just messin around
@@ -218,13 +253,13 @@ StrLineIter str_lines(Str s) {
 }
 
 bool str_lines_next(StrLineIter* iter, Str *line) {
-    if (iter->pos >= iter->base.n) {
+    if (iter->pos >= iter->base.count) {
         return false;
     }
 
     u64 line_start = iter->pos;
-    u8 *data = iter->base.v;
-    const u64 size = iter->base.n;
+    Arr<u8> data = iter->base;
+    const u64 size = iter->base.count;
 
     // Advance until next line break
     u64 line_end = line_start;
@@ -244,8 +279,8 @@ bool str_lines_next(StrLineIter* iter, Str *line) {
     iter->pos = next_line_start;
 
     if (line != nullptr) {
-        line->v = iter->base.v + line_start;
-        line->n = line_end - line_start;
+        line->value = iter->base.value + line_start;
+        line->count = line_end - line_start;
     }
 
     return true;
@@ -262,19 +297,15 @@ u64 str_count_lines(Str s) {
 
 Pair<Str, Str> str_split2(Str base, u8 delim) {
     u64 delim_idx = 0;
-    while (delim_idx < base.n && base.v[delim_idx] != delim) {
+    while (delim_idx < base.count && base[delim_idx] != delim) {
         delim_idx++;
     }
     Pair<Str, Str> result = {};
-    if (delim_idx < base.n) {
+    if (delim_idx < base.count) {
         result.left = arr_slice(base, 0, delim_idx);
-        result.right = arr_slice(base, delim_idx + 1, base.n);
+        result.right = arr_slice(base, delim_idx + 1, base.count);
     }
     return result;
-}
-
-bool str_eq(Str a, Str b) {
-    return a.n == b.n && memcmp(a.v, b.v, a.n) == 0;
 }
 
 //
@@ -283,15 +314,23 @@ bool str_eq(Str a, Str b) {
 
 template <typename T>
 struct Vec {
-    T *v;
-    u64 n; // Element count (not size in bytes)
+    T *value;
+    u64 count; // Element count (not size in bytes)
     u64 cap; // Element capacity (not size capacity in bytes)
+    
+    T& operator[](u64 i) {
+        if (i >= count) {
+            fprintf(stderr, "Bounds check fail! %lld >= %lld", i, count);
+            exit(EXIT_FAILURE);
+        }
+        return value[i];
+    }
 };
 
 #define MIN_VEC_CAPACITY 8
 
 template <typename T>
-void _vec_grow(Arena *arena, Vec<T> *vec, u64 new_cap) {
+void vec__grow(Arena *arena, Vec<T> *vec, u64 new_cap) {
     // Fast path?
     if (new_cap <= vec->cap) return;
 
@@ -299,31 +338,36 @@ void _vec_grow(Arena *arena, Vec<T> *vec, u64 new_cap) {
 
     if (new_cap > vec->cap) {
         Arr<T> new_arr = arena_push_arr<T>(arena, new_cap);
-        memcpy(new_arr.v, vec->v, vec->n * sizeof(T));
+        Arr<T> new_arr_slice = arr_slice(new_arr, 0, vec->count);
+        arr_copy(new_arr_slice, vec_arr(vec));
 
-        vec->v = new_arr.v;
+        vec->value = new_arr.value;
         vec->cap = new_cap;
     }
 }
 
 template <typename T>
 T *vec_push(Arena *arena, Vec<T> *vec, T val) {
-    _vec_grow(arena, vec, vec->n + 1);
-    vec->v[vec->n] = val;
-    return &vec->v[vec->n++];
+    vec__grow(arena, vec, vec->count + 1);
+    vec->value[vec->count] = val;
+    return &vec->value[vec->count++];
 }
 
 template <typename T>
 Arr<T> vec_extend(Arena *arena, Vec<T> *vec, Arr<T> arr) {
-    _vec_grow(arena, vec, vec->n + arr.n);
-    memcpy(vec->v + vec->n, arr.v, arr.n * sizeof(T));
-    vec->n += arr.n;
-    return { .v = vec->v + arr.n, .n = arr.n };
+    vec__grow(arena, vec, vec->count + arr.count);
+
+    u64 start = vec->count;
+    vec->count += arr.count;
+    Arr<T> a = arr_slice(vec_arr(vec), start, vec->count);
+    arr_copy(a, arr);
+    
+    return a;
 }
 
 template <typename T>
 Arr<T> vec_arr(Vec<T> *vec) {
-    return { .v = vec->v, .n = vec->n };
+    return { .value = vec->value, .count = vec->count };
 }
 
 //
@@ -370,16 +414,16 @@ void run_cmd(Cmd *cmd) {
     const posix_spawn_file_actions_t *file_actions = nullptr;
     const posix_spawnattr_t *attrp = nullptr;
 
-    Arr<char *> args = arena_push_arr<char *>(&scratch, cmd->args.n + 2);
-    args.v[0] = name;
-    for (u64 i = 0; i < cmd->args.n; i++) {
-        args.v[i + 1] = str_to_c(&scratch, cmd->args.v[i]);
+    Arr<char *> args = arena_push_arr<char *>(&scratch, cmd->args.count + 2);
+    args[0] = name;
+    for (u64 i = 0; i < cmd->args.count; i++) {
+        args[i + 1] = str_to_c(&scratch, cmd->args[i]);
     }
 
-    Arr<char *> env = arena_push_arr<char *>(&scratch, cmd->env.n + 1);
-    for (u64 i = 0; i < cmd->env.n; i++) {
-        Str var = cmd->env.v[i].left;
-        Str val = cmd->env.v[i].right;
+    Arr<char *> env = arena_push_arr<char *>(&scratch, cmd->env.count + 1);
+    for (u64 i = 0; i < cmd->env.count; i++) {
+        Str var = cmd->env[i].left;
+        Str val = cmd->env[i].right;
 
         // Build "{var}={val}"
         Vec<u8> line = {};
@@ -387,10 +431,10 @@ void run_cmd(Cmd *cmd) {
         vec_push(&scratch, &line, C('='));
         vec_extend(&scratch, &line, val);
 
-        env.v[i] = str_to_c(&scratch, vec_arr(&line));
+        env[i] = str_to_c(&scratch, vec_arr(&line));
     }
 
-    int result = posix_spawnp(&pid, name, file_actions, attrp, args.v, env.v);
+    int result = posix_spawnp(&pid, name, file_actions, attrp, args.value, env.value);
     if (result != 0) {
         fprintf(stderr, "Failed to posix_spawnp: code %d\n", result);
         exit(EXIT_FAILURE);
@@ -483,10 +527,10 @@ Arr<Pair<Str, Str>> restic_config_to_env(Arena *arena, ResticConfig *config) {
 
     vec_push(arena, &env, { S("RESTIC_REPOSITORY"), config->restic_repository });
     vec_push(arena, &env, { S("RESTIC_PASSWORD"), config->restic_password });
-    if (!str_is_empty(config->aws_access_key_id)) {
+    if (!arr_is_empty(config->aws_access_key_id)) {
         vec_push(arena, &env, { S("AWS_ACCESS_KEY_ID"), config->aws_access_key_id });
     }
-    if (!str_is_empty(config->aws_secret_access_key)) {
+    if (!arr_is_empty(config->aws_secret_access_key)) {
         vec_push(arena, &env, { S("AWS_SECRET_ACCESS_KEY"), config->aws_secret_access_key });
     }
 
@@ -516,9 +560,12 @@ int main(int argc, char **argv, char **envp) {
 
     Arr<ResticConfig> configs = get_restic_configs(&arena);
     printf("Restic configs:\n");
-    for (u64 i = 0; i < configs.n; i++) {
-        char *name_cstr = str_to_c(&arena, configs.v[i].name);
+    for (u64 i = 0; i < configs.count; i++) {
+        printf("\n");
+        char *name_cstr = str_to_c(&arena, configs[i].name);
+        char *repo_cstr = str_to_c(&arena, configs[i].restic_repository);
         printf("Name: %s\n", name_cstr);
+        printf("Repo: %s\n", repo_cstr);
     }
      
     arena_release(&arena);
