@@ -419,12 +419,37 @@ Str path_join(Arena *arena, Str left_path, Str right_path) {
 //     return vec_arr(map);
 // }
 
+//
+// Defer
+//
+
+template<typename F>
+struct Defer {
+    F fn;
+    explicit Defer(F f) : fn(f) {}
+    ~Defer() { fn(); }
+
+    Defer(const Defer&) = delete;
+    Defer& operator=(const Defer&) = delete;
+};
+
+// Deduction guide (C++17) — lets you write Defer d([&]{...}) without specifying F
+template<typename F>
+Defer(F) -> Defer<F>;
+
+#define CONCAT_IMPL(a, b) a##b
+#define CONCAT(a, b) CONCAT_IMPL(a, b)
+#define defer(code) Defer CONCAT(_defer_, __LINE__)([&]{ code; })
+
+//
 // Subprocesses
+//
 
 Arr<char *> g_envp;
 
 Str env_get(Str key) {
     Arena scratch = {};
+    defer(arena_release(&scratch));
 
     char *key_cstr = str_to_c(&scratch, key);
     char *value_cstr = getenv(key_cstr);
@@ -433,8 +458,6 @@ Str env_get(Str key) {
     if (value_cstr != nullptr) {
         result = str_from_c(value_cstr);
     }
-
-    arena_release(&scratch);
 
     return result;
 }
@@ -481,18 +504,24 @@ Arr<char *> cmd__build_env(Arena *arena, Cmd *cmd) {
 // TODO error reporting
 void cmd_run(Cmd *cmd) {
     Arena scratch = {};
+    defer(arena_release(&scratch));
 
     Arr<char *> args = cmd__build_args(&scratch, cmd);
     Arr<char *> env = cmd__build_env(&scratch, cmd);
 
     posix_spawnattr_t spawnattr = {};
     posix_spawnattr_init(&spawnattr);
+    defer(posix_spawnattr_destroy(&spawnattr));
     posix_spawnattr_setflags(&spawnattr, POSIX_SPAWN_CLOEXEC_DEFAULT); // Don't inherit fds by default
 
     const bool provide_stdin = !arr_is_empty(cmd->input);
     int stdin_pipe[2] = { -1, -1 };
+    defer(close(stdin_pipe[0]));
+    defer(close(stdin_pipe[1]));
+
     posix_spawn_file_actions_t actions = {};
     posix_spawn_file_actions_init(&actions);
+    defer(posix_spawn_file_actions_destroy(&actions));
 
     if (provide_stdin) {
         pipe(stdin_pipe);
@@ -512,7 +541,6 @@ void cmd_run(Cmd *cmd) {
     }
 
     if (provide_stdin) {
-        close(stdin_pipe[0]);
         write(stdin_pipe[1], cmd->input.value, cmd->input.count);
         close(stdin_pipe[1]);
     }
@@ -527,11 +555,6 @@ void cmd_run(Cmd *cmd) {
         fprintf(stderr, "Subprocess '%s' exited with code %d\n", name, WEXITSTATUS(status));
         exit(EXIT_FAILURE);
     }
-
-    posix_spawnattr_destroy(&spawnattr);
-    posix_spawn_file_actions_destroy(&actions);
-
-    arena_release(&scratch);
 }
 
 //
@@ -587,12 +610,16 @@ Arr<ResticConfig> get_restic_configs(Arena *arena) {
 }
 
 void do_upgrade() {
+    printf("Starting macOS upgrades\n");
+
     Str args[] = { S("upgrade") };
     Cmd cmd = { 
         .name = S("brew"), 
         .args = A(args),
     };
     cmd_run(&cmd);
+
+    printf("Finished macOS upgrades\n");
 }
 
 void backup_filesystem_to(
@@ -601,8 +628,9 @@ void backup_filesystem_to(
     Arr<Str> extra_restic_args
 ) {
     Arena scratch = {};
+    defer(arena_release(&scratch));
 
-    printf("Backup to '%s' started", str_to_c(&scratch, config->name));
+    printf("Backup to '%s' started\n", str_to_c(&scratch, config->name));
 
     // Build args
     Str base_restic_args[] = { 
@@ -648,17 +676,14 @@ void backup_filesystem_to(
     };
     cmd_run(&restic_cmd);
 
-    printf("Backup to '%s' complete", str_to_c(&scratch, config->name));
-
-    arena_release(&scratch);
+    printf("Backup to '%s' complete\n", str_to_c(&scratch, config->name));
 }
 
-int main(int argc, char **argv, char **envp) {
-    g_envp = arr_from_null_terminated(envp);
-
+void do_backup() {
     Arena arena = {};
+    defer(arena_release(&arena));
 
-    do_upgrade();
+    printf("Starting system backup\n");
 
     Arr<ResticConfig> configs = get_restic_configs(&arena);
     Str extra_restic_args[] = { S("--tag"), S("macos") };
@@ -666,6 +691,14 @@ int main(int argc, char **argv, char **envp) {
         backup_filesystem_to(A(MAC_BACKUP_DIRS), &configs[i], A(extra_restic_args));
     }
 
-    arena_release(&arena);
+    printf("Finished system backup\n");
+}
+
+int main(int argc, char **argv, char **envp) {
+    g_envp = arr_from_null_terminated(envp);
+
+    do_upgrade();
+    do_backup();
+
     return EXIT_SUCCESS;
 }
