@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <spawn.h>
+#include <time.h>
 
 void arena__ensure_init(Arena *arena) {
     if (arena->data == nullptr) {
@@ -286,3 +287,69 @@ void cmd_run(Cmd *cmd) {
     }
 }
 
+//
+// Logging
+//
+
+struct LogEvent {
+    va_list ap;
+    const char *fmt;
+    struct tm *time;
+    FILE *out;
+    LogLevel level;
+};
+
+static struct {
+    void *udata;
+    LogLevel level;
+} s_log;
+
+static const char *level_strings[] = {
+    "TRACE", "DEBUG", "INFO", "WARN", "ERROR", "FATAL"
+};
+
+static const char *level_colors[] = {
+    "\x1b[94m", "\x1b[36m", "\x1b[32m", "\x1b[33m", "\x1b[31m", "\x1b[35m"
+};
+
+static void stdout_callback(LogEvent *ev) {
+    char buf[16];
+    buf[strftime(buf, sizeof(buf), "%H:%M:%S", ev->time)] = '\0';
+    fprintf(
+            ev->out, "\x1b[90m%s %s%-5s \x1b[0m",
+            buf, level_colors[(int)ev->level], level_strings[(int)ev->level]);
+    vfprintf(ev->out, ev->fmt, ev->ap);
+    fprintf(ev->out, "\n");
+    fflush(ev->out);
+}
+
+const char* log_level_string(int level) {
+    return level_strings[level];
+}
+
+void log_set_level(LogLevel level) {
+    s_log.level = level;
+}
+
+static void init_event(LogEvent *ev, FILE *out) {
+    if (!ev->time) {
+        time_t t = time(NULL);
+        ev->time = localtime(&t);
+    }
+    ev->out = out;
+}
+
+
+void log_log(LogLevel level, const char *fmt, ...) {
+    LogEvent ev = {
+        .fmt   = fmt,
+        .level = level,
+    };
+
+    if ((int)level >= (int)s_log.level) {
+        init_event(&ev, stderr);
+        va_start(ev.ap, fmt);
+        stdout_callback(&ev);
+        va_end(ev.ap);
+    }
+}

@@ -2,6 +2,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdarg.h>
 
 typedef uint8_t u8;
 typedef uint16_t u16;
@@ -307,3 +308,20 @@ struct Cmd {
 
 // TODO error reporting
 void cmd_run(Cmd *cmd);
+
+
+//
+// Logging
+//
+
+enum class LogLevel { Trace, Debug, Info, Warn, Error, Fatal };
+
+#define log_trace(...) log_log(LogLevel::Trace, __VA_ARGS__)
+#define log_debug(...) log_log(LogLevel::Debug, __VA_ARGS__)
+#define log_info(...)  log_log(LogLevel::Info, __VA_ARGS__)
+#define log_warn(...)  log_log(LogLevel::Warn, __VA_ARGS__)
+#define log_error(...) log_log(LogLevel::Error, __VA_ARGS__)
+#define log_fatal(...) log_log(LogLevel::Fatal, __VA_ARGS__)
+
+void log_set_level(LogLevel level);
+void log_log(LogLevel level, const char *fmt, ...);

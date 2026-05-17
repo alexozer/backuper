@@ -49,7 +49,7 @@ Arr<ResticConfig> get_restic_configs(Arena *arena) {
 }
 
 void do_upgrade() {
-    printf("Starting macOS upgrades\n");
+    log_info("Starting macOS upgrades");
 
     Str args[] = { S("upgrade") };
     Cmd cmd = { 
@@ -58,7 +58,7 @@ void do_upgrade() {
     };
     cmd_run(&cmd);
 
-    printf("Finished macOS upgrades\n");
+    log_info("Finished macOS upgrades");
 }
 
 void backup_filesystem_to(
@@ -69,7 +69,7 @@ void backup_filesystem_to(
     Arena scratch = {};
     defer(arena_release(&scratch));
 
-    printf("Backup to '%s' started\n", str_to_c(&scratch, config->name));
+    log_info("Backup to '%s' started", str_to_c(&scratch, config->name));
 
     // Build args
     Str base_restic_args[] = { 
@@ -115,14 +115,14 @@ void backup_filesystem_to(
     };
     cmd_run(&restic_cmd);
 
-    printf("Backup to '%s' complete\n", str_to_c(&scratch, config->name));
+    log_info("Backup to '%s' complete", str_to_c(&scratch, config->name));
 }
 
 void do_backup() {
     Arena arena = {};
     defer(arena_release(&arena));
 
-    printf("Starting system backup\n");
+    log_info("Starting system backup");
 
     Arr<ResticConfig> configs = get_restic_configs(&arena);
     Str extra_restic_args[] = { S("--tag"), S("macos") };
@@ -130,7 +130,7 @@ void do_backup() {
         backup_filesystem_to(A(MAC_BACKUP_DIRS), &configs[i], A(extra_restic_args));
     }
 
-    printf("Finished system backup\n");
+    log_info("Finished system backup");
 }
 
 int main(int argc, char **argv, char **envp) {
