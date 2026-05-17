@@ -421,6 +421,8 @@ Str path_join(Arena *arena, Str left_path, Str right_path) {
 
 // Subprocesses
 
+Arr<char *> g_envp;
+
 Str env_get(Str key) {
     Arena scratch = {};
 
@@ -457,15 +459,9 @@ Arr<char *> cmd__build_args(Arena *arena, Cmd *cmd) {
 Arr<char *> cmd__build_env(Arena *arena, Cmd *cmd) {
     Vec<char *> env = {};
 
-    Vec<Pair<Str, Str>> pairs = {};
-    vec_extend(arena, &pairs, cmd->env);
-    vec_push(arena, &pairs, { S("HOME"), env_get(S("HOME")) });
-    vec_push(arena, &pairs, { S("PATH"), env_get(S("PATH")) });
-    vec_push(arena, &pairs, { S("USER"), env_get(S("USER")) });
-
-    for (u64 i = 0; i < pairs.count; i++) {
-        Str var = pairs[i].left;
-        Str val = pairs[i].right;
+    for (u64 i = 0; i < cmd->env.count; i++) {
+        Str var = cmd->env[i].left;
+        Str val = cmd->env[i].right;
 
         // Build "{var}={val}"
         Vec<u8> line = {};
@@ -476,6 +472,7 @@ Arr<char *> cmd__build_env(Arena *arena, Cmd *cmd) {
 
         vec_push(arena, &env, (char *)line.value);
     }
+    vec_extend(arena, &env, g_envp);
     vec_push(arena, &env, (char *)nullptr);
 
     return vec_arr(&env);
@@ -488,6 +485,10 @@ void cmd_run(Cmd *cmd) {
     Arr<char *> args = cmd__build_args(&scratch, cmd);
     Arr<char *> env = cmd__build_env(&scratch, cmd);
 
+    posix_spawnattr_t spawnattr = {};
+    posix_spawnattr_init(&spawnattr);
+    posix_spawnattr_setflags(&spawnattr, POSIX_SPAWN_CLOEXEC_DEFAULT); // Don't inherit fds by default
+
     const bool provide_stdin = !arr_is_empty(cmd->input);
     int stdin_pipe[2] = { -1, -1 };
     posix_spawn_file_actions_t actions = {};
@@ -495,17 +496,16 @@ void cmd_run(Cmd *cmd) {
 
     if (provide_stdin) {
         pipe(stdin_pipe);
-        posix_spawn_file_actions_addclose(&actions, stdin_pipe[1]);
         posix_spawn_file_actions_adddup2(&actions, stdin_pipe[0], STDIN_FILENO);
         posix_spawn_file_actions_addclose(&actions, stdin_pipe[0]);
-    } else {
-        posix_spawn_file_actions_addclose(&actions, STDIN_FILENO);
     }
+    
+    posix_spawn_file_actions_addinherit_np(&actions, STDOUT_FILENO);
+    posix_spawn_file_actions_addinherit_np(&actions, STDERR_FILENO);
 
     pid_t pid = -1;
-    const posix_spawnattr_t *attrp = nullptr;
     char *name = str_to_c(&scratch, cmd->name);
-    int result = posix_spawnp(&pid, name, &actions, attrp, args.value, env.value);
+    int result = posix_spawnp(&pid, name, &actions, &spawnattr, args.value, env.value);
     if (result != 0) {
         fprintf(stderr, "Failed to invoke posix_spawnp: code %d\n", result);
         exit(EXIT_FAILURE);
@@ -528,6 +528,7 @@ void cmd_run(Cmd *cmd) {
         exit(EXIT_FAILURE);
     }
 
+    posix_spawnattr_destroy(&spawnattr);
     posix_spawn_file_actions_destroy(&actions);
 
     arena_release(&scratch);
@@ -536,8 +537,6 @@ void cmd_run(Cmd *cmd) {
 //
 // Main
 //
-
-Arr<char *> g_envp;
 
 static Str MAC_BACKUP_DIRS[] = {
     S("Documents"),
@@ -654,13 +653,12 @@ void backup_filesystem_to(
     arena_release(&scratch);
 }
 
-// Goal: count lines in file
 int main(int argc, char **argv, char **envp) {
     g_envp = arr_from_null_terminated(envp);
 
     Arena arena = {};
 
-    // do_upgrade();
+    do_upgrade();
 
     Arr<ResticConfig> configs = get_restic_configs(&arena);
     Str extra_restic_args[] = { S("--tag"), S("macos") };
