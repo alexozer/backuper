@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/mman.h>
+#include <sys/wait.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
@@ -254,7 +255,6 @@ OSResult cmd_run(Cmd *cmd) {
     defer(posix_spawnattr_destroy(&spawnattr));
     posix_spawnattr_setflags(&spawnattr, POSIX_SPAWN_CLOEXEC_DEFAULT); // Don't inherit fds by default
 
-    const bool provide_stdin = !arr_is_empty(cmd->input);
     int stdin_pipe[2] = { -1, -1 };
     defer(close(stdin_pipe[0]));
     defer(close(stdin_pipe[1]));
@@ -265,7 +265,7 @@ OSResult cmd_run(Cmd *cmd) {
     }
     defer(posix_spawn_file_actions_destroy(&actions));
 
-    if (provide_stdin) {
+    if (!arr_is_empty(cmd->input)) {
         switch (pipe(stdin_pipe)) {
             case 0: break;
             case EFAULT: return OSResult::OtherError;
@@ -280,6 +280,13 @@ OSResult cmd_run(Cmd *cmd) {
 
         result = cmd__check_file_action(
                 posix_spawn_file_actions_addclose(&actions, stdin_pipe[0]));
+        if (result != OSResult::Ok) return result;
+    }
+
+    if (!arr_is_empty(cmd->cwd)) {
+        char *cwd_cstr = str_to_c(&scratch, cmd->cwd);
+        OSResult result = cmd__check_file_action(
+                posix_spawn_file_actions_addchdir(&actions, cwd_cstr));
         if (result != OSResult::Ok) return result;
     }
 
@@ -306,7 +313,7 @@ OSResult cmd_run(Cmd *cmd) {
         default: return OSResult::OtherError;
     }
 
-    if (provide_stdin) {
+    if (!arr_is_empty(cmd->input)) {
         if (write(stdin_pipe[1], cmd->input.value, cmd->input.count) != cmd->input.count) {
             return OSResult::OtherError;
         }
@@ -382,7 +389,6 @@ static void init_event(LogEvent *ev, FILE *out) {
     }
     ev->out = out;
 }
-
 
 void log_log(LogLevel level, const char *fmt, ...) {
     LogEvent ev = {

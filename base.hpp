@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
+#include <stdint.h>
+#include <inttypes.h>
 
 typedef uint8_t u8;
 typedef uint16_t u16;
@@ -52,7 +54,7 @@ struct Arr {
 
     T& operator[](u64 i) {
         if (i >= count) {
-            fprintf(stderr, "Bounds check fail! i = %lld, count = %lld\n", i, count);
+            fprintf(stderr, "Bounds check fail! i = %" PRIu64 " count = %" PRIu64 "\n", i, count);
             exit(EXIT_FAILURE);
         }
         return value[i];
@@ -95,7 +97,7 @@ Arr<T> arr_from_null_terminated(T *v) {
 template <typename T>
 Arr<T> arr_slice(Arr<T> arr, u64 start, u64 end) {
     if (start > arr.count || end > arr.count || end < start) {
-        fprintf(stderr, "Invalid array slice: count = %lld, start = %lld, end = %lld\n", arr.count, start, end);
+        fprintf(stderr, "Invalid array slice: count = %" PRIu64 ", start = %" PRIu64 ", end = %" PRIu64 "\n", arr.count, start, end);
         exit(EXIT_FAILURE);
     }
 
@@ -121,7 +123,7 @@ bool arr_eq(Arr<T> a, Arr<T> b) {
 template <typename T>
 void arr_copy(Arr<T> dest, Arr<T> source) {
     if (dest.count != source.count) {
-        fprintf(stderr, "Unequal array lengths: dest = %lld, source = %lld\n", dest.count, source.count);
+        fprintf(stderr, "Unequal array lengths: dest = %" PRIu64 ", source = %" PRIu64 "\n", dest.count, source.count);
         exit(EXIT_FAILURE);
     }
     for (u64 i = 0; i < dest.count; i++) {
@@ -186,7 +188,7 @@ struct Vec {
     
     T& operator[](u64 i) {
         if (i >= count) {
-            fprintf(stderr, "Bounds check fail! %lld >= %lld", i, count);
+            fprintf(stderr, "Bounds check fail! %" PRIu64 " >= %" PRIu64 "\n", i, count);
             exit(EXIT_FAILURE);
         }
         return value[i];
@@ -304,6 +306,7 @@ struct Cmd {
     Arr<Str> args;
     Arr<Pair<Str, Str>> env;
     Arr<u8> input;
+    Str cwd;
 };
 
 enum class [[nodiscard]] OSResult {
