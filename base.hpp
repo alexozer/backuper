@@ -306,9 +306,17 @@ struct Cmd {
     Arr<u8> input;
 };
 
-// TODO error reporting
-void cmd_run(Cmd *cmd);
+enum class OSResult {
+    Ok,
+    PermissionDenied,
+    AllocationFailed,
+    InvalidPath,
+    InvalidFileDescriptor,
+    OtherError,
+};
 
+// TODO error reporting
+OSResult cmd_run(Cmd *cmd);
 
 //
 // Logging

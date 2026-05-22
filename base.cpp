@@ -8,6 +8,7 @@
 #include <sys/stat.h>
 #include <spawn.h>
 #include <time.h>
+#include <errno.h>
 
 void arena__ensure_init(Arena *arena) {
     if (arena->data == nullptr) {
@@ -231,16 +232,25 @@ Arr<char *> cmd__build_env(Arena *arena, Cmd *cmd) {
     return vec_arr(&env);
 }
 
-// TODO error reporting
-void cmd_run(Cmd *cmd) {
+OSResult cmd__check_file_action(int code) {
+    switch (code) {
+        case 0: return OSResult::Ok;
+        case EBADF: return OSResult::InvalidFileDescriptor;
+        case ENAMETOOLONG: return OSResult::InvalidPath;
+        case ENOMEM: return OSResult::AllocationFailed;
+        default: return OSResult::OtherError;
+    }
+}
+
+// TODO assertions
+OSResult cmd_run(Cmd *cmd) {
     Arena scratch = {};
     defer(arena_release(&scratch));
 
-    Arr<char *> args = cmd__build_args(&scratch, cmd);
-    Arr<char *> env = cmd__build_env(&scratch, cmd);
-
     posix_spawnattr_t spawnattr = {};
-    posix_spawnattr_init(&spawnattr);
+    switch (posix_spawnattr_init(&spawnattr)) {
+        case ENOMEM: return OSResult::AllocationFailed;
+    }
     defer(posix_spawnattr_destroy(&spawnattr));
     posix_spawnattr_setflags(&spawnattr, POSIX_SPAWN_CLOEXEC_DEFAULT); // Don't inherit fds by default
 
@@ -250,33 +260,65 @@ void cmd_run(Cmd *cmd) {
     defer(close(stdin_pipe[1]));
 
     posix_spawn_file_actions_t actions = {};
-    posix_spawn_file_actions_init(&actions);
+    switch (posix_spawn_file_actions_init(&actions)) {
+        case ENOMEM: return OSResult::AllocationFailed;
+    }
     defer(posix_spawn_file_actions_destroy(&actions));
 
     if (provide_stdin) {
-        pipe(stdin_pipe);
-        posix_spawn_file_actions_adddup2(&actions, stdin_pipe[0], STDIN_FILENO);
-        posix_spawn_file_actions_addclose(&actions, stdin_pipe[0]);
+        switch (pipe(stdin_pipe)) {
+            case 0: break;
+            case EFAULT: return OSResult::OtherError;
+            case EMFILE: return OSResult::InvalidFileDescriptor;
+            case ENFILE: return OSResult::InvalidFileDescriptor;
+            default: return OSResult::OtherError;
+        }
+
+        OSResult result = cmd__check_file_action(
+                posix_spawn_file_actions_adddup2(&actions, stdin_pipe[0], STDIN_FILENO));
+        if (result != OSResult::Ok) return result;
+
+        result = cmd__check_file_action(
+                posix_spawn_file_actions_addclose(&actions, stdin_pipe[0]));
+        if (result != OSResult::Ok) return result;
     }
-    
-    posix_spawn_file_actions_addinherit_np(&actions, STDOUT_FILENO);
-    posix_spawn_file_actions_addinherit_np(&actions, STDERR_FILENO);
+
+    OSResult result = cmd__check_file_action(
+            posix_spawn_file_actions_addinherit_np(&actions, STDOUT_FILENO));
+    if (result != OSResult::Ok) return result;
+
+    result = cmd__check_file_action(
+            posix_spawn_file_actions_addinherit_np(&actions, STDERR_FILENO));
+    if (result != OSResult::Ok) return result;
 
     pid_t pid = -1;
     char *name = str_to_c(&scratch, cmd->name);
-    int result = posix_spawnp(&pid, name, &actions, &spawnattr, args.value, env.value);
-    if (result != 0) {
-        fprintf(stderr, "Failed to invoke posix_spawnp: code %d\n", result);
-        exit(EXIT_FAILURE);
+    Arr<char *> args = cmd__build_args(&scratch, cmd);
+    Arr<char *> env = cmd__build_env(&scratch, cmd);
+
+    switch (posix_spawnp(&pid, name, &actions, &spawnattr, args.value, env.value)) {
+        case 0: break;
+        case EACCES: return OSResult::PermissionDenied;
+        case ENAMETOOLONG: return OSResult::InvalidPath;
+        case ENOTDIR: return OSResult::InvalidPath;
+        case ENOMEM: return OSResult::AllocationFailed;
+        case EBADF: return OSResult::InvalidFileDescriptor;
+        default: return OSResult::OtherError;
     }
 
     if (provide_stdin) {
-        write(stdin_pipe[1], cmd->input.value, cmd->input.count);
-        close(stdin_pipe[1]);
+        if (write(stdin_pipe[1], cmd->input.value, cmd->input.count) != cmd->input.count) {
+            return OSResult::OtherError;
+        }
+        if (close(stdin_pipe[1]) != 0) {
+            return OSResult::OtherError;
+        }
     }
 
     int status = 0;
-    waitpid(pid, &status, 0);
+    if (waitpid(pid, &status, 0) == -1) {
+        return OSResult::OtherError;
+    }
     if (!WIFEXITED(status)) {
         fprintf(stderr, "Subprocess '%s' didn't exit normally\n", name);
         exit(EXIT_FAILURE);
@@ -285,6 +327,8 @@ void cmd_run(Cmd *cmd) {
         fprintf(stderr, "Subprocess '%s' exited with code %d\n", name, WEXITSTATUS(status));
         exit(EXIT_FAILURE);
     }
+
+    return OSResult::Ok;
 }
 
 //
