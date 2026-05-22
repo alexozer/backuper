@@ -306,7 +306,7 @@ struct Cmd {
     Arr<u8> input;
 };
 
-enum class OSResult {
+enum class [[nodiscard]] OSResult {
     Ok,
     PermissionDenied,
     AllocationFailed,

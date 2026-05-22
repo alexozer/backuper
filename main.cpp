@@ -56,7 +56,9 @@ void do_upgrade() {
         .name = S("brew"), 
         .args = A(args),
     };
-    cmd_run(&cmd);
+    if (cmd_run(&cmd) != OSResult::Ok) {
+        log_error("Failed to execute brew command");
+    }
 
     log_info("Finished macOS upgrades");
 }
@@ -113,7 +115,9 @@ void backup_filesystem_to(
         .env = vec_arr(&env),
         .input = vec_arr(&abs_file_patterns),
     };
-    cmd_run(&restic_cmd);
+    if (cmd_run(&restic_cmd) != OSResult::Ok) {
+        log_error("Failed to execute restic command");
+    }
 
     log_info("Backup to '%s' complete", str_to_c(&scratch, config->name));
 }
