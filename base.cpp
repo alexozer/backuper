@@ -6,11 +6,13 @@
 #include <fcntl.h>
 #include <time.h>
 
+void *os_alloc(u64 size);
+void os_free(void *buf, u64 size);
+
 void arena__ensure_init(Arena *arena) {
     if (arena->data == nullptr) {
-        const u64 data_size = megabytes(16);
-        arena->data = calloc(1, data_size);
-        arena->reserved = data_size;
+        arena->reserved = megabytes(16);
+        arena->data = os_alloc(arena->reserved);
     }
 }
 
@@ -30,7 +32,7 @@ void *arena__push_bytes(Arena *arena, u64 size, u64 alignment) {
 
 void arena_release(Arena *arena) {
     if (arena->data != nullptr) {
-        free(arena->data);
+        os_free(arena->data, arena->reserved);
         *arena = (Arena){};
     }
 }
@@ -194,38 +196,6 @@ Str env_get(Str key) {
     }
 
     return result;
-}
-
-Arr<char *> cmd__build_args(Arena *arena, Cmd *cmd) {
-    Arr<char *> args = arena_push_arr<char *>(arena, cmd->args.count + 2);
-    char *name = str_to_c(arena, cmd->name);
-    args[0] = name;
-    for (u64 i = 0; i < cmd->args.count; i++) {
-        args[i + 1] = str_to_c(arena, cmd->args[i]);
-    }
-    return args;
-}
-
-Arr<char *> cmd__build_env(Arena *arena, Cmd *cmd) {
-    Vec<char *> env = {};
-
-    for (u64 i = 0; i < cmd->env.count; i++) {
-        Str var = cmd->env[i].left;
-        Str val = cmd->env[i].right;
-
-        // Build "{var}={val}"
-        Vec<u8> line = {};
-        vec_extend(arena, &line, var);
-        vec_push(arena, &line, C('='));
-        vec_extend(arena, &line, val);
-        vec_push(arena, &line, C('\0'));
-
-        vec_push(arena, &env, (char *)line.value);
-    }
-    vec_extend(arena, &env, g_envp);
-    vec_push(arena, &env, (char *)nullptr);
-
-    return vec_arr(&env);
 }
 
 //

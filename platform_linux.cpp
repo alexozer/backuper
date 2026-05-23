@@ -1,6 +1,7 @@
 #include "base.hpp"
 
 #include <sys/wait.h>
+#include <sys/mman.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
