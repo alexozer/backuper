@@ -315,11 +315,14 @@ enum class [[nodiscard]] OSResult {
     AllocationFailed,
     InvalidPath,
     InvalidFileDescriptor,
+    SubprocessExitError,
+    SubprocessNonZeroExitCode,
     OtherError,
 };
 
-// TODO error reporting
 OSResult cmd_run(Cmd *cmd);
+Arr<char *> cmd__build_args(Arena *arena, Cmd *cmd);
+Arr<char *> cmd__build_env(Arena *arena, Cmd *cmd);
 
 //
 // Logging

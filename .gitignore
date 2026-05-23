@@ -1,3 +1,5 @@
 .DS_Store
 /target
 /backuper
+/backuper_linux
+/backuper_macos
