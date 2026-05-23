@@ -58,7 +58,7 @@ OSResult cmd_run(Cmd *cmd) {
     if (!arr_is_empty(cmd->cwd)) {
         char *cwd_cstr = str_to_c(&scratch, cmd->cwd);
         OSResult result = cmd__check_file_action(
-                posix_spawn_file_actions_addchdir(&actions, cwd_cstr));
+                posix_spawn_file_actions_addchdir_np(&actions, cwd_cstr));
         if (result != OSResult::Ok) return result;
     }
 
