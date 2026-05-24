@@ -22,7 +22,9 @@ OSResult cmd_run(Cmd *cmd) {
 
     posix_spawnattr_t spawnattr = {};
     switch (posix_spawnattr_init(&spawnattr)) {
+        case 0: break;
         case ENOMEM: return OSResult::AllocationFailed;
+        default: return OSResult::OtherError;
     }
     defer(posix_spawnattr_destroy(&spawnattr));
     posix_spawnattr_setflags(&spawnattr, POSIX_SPAWN_CLOEXEC_DEFAULT); // Don't inherit fds by default
@@ -33,7 +35,9 @@ OSResult cmd_run(Cmd *cmd) {
 
     posix_spawn_file_actions_t actions = {};
     switch (posix_spawn_file_actions_init(&actions)) {
+        case 0: break;
         case ENOMEM: return OSResult::AllocationFailed;
+        default: return OSResult::OtherError;
     }
     defer(posix_spawn_file_actions_destroy(&actions));
 
