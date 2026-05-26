@@ -1,12 +1,14 @@
 #include "base.hpp"
 
 #include <sys/mman.h>
+#include <unistd.h>
+
+#include "platform.hpp"
 
 void *os_alloc(u64 size) {
     void *buf = mmap(nullptr, (size_t)size, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
     if (buf == nullptr) {
-        fprintf(stderr, "mmap failed\n");
-        exit(EXIT_FAILURE);
+        log_fatal("mmap failed");
     }
     return buf;
 }
@@ -45,4 +47,8 @@ Arr<char *> cmd__build_env(Arena *arena, Cmd *cmd) {
     vec_push(arena, &env, (char *)nullptr);
 
     return vec_arr(&env);
+}
+
+[[noreturn]] void os_exit() {
+    _exit(1);
 }

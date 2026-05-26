@@ -1,7 +1,5 @@
 #pragma once
 
-#include <stdio.h>
-#include <stdlib.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <inttypes.h>
@@ -44,6 +42,24 @@ constexpr u64 next_pow2(u64 x) {
 }
 
 //
+// Logging
+//
+
+enum class LogLevel { Trace, Debug, Info, Warn, Error, Fatal };
+
+#define log_trace(...) log_log(LogLevel::Trace, __VA_ARGS__)
+#define log_debug(...) log_log(LogLevel::Debug, __VA_ARGS__)
+#define log_info(...)  log_log(LogLevel::Info, __VA_ARGS__)
+#define log_warn(...)  log_log(LogLevel::Warn, __VA_ARGS__)
+#define log_error(...) log_log(LogLevel::Error, __VA_ARGS__)
+__attribute__((format(printf, 1, 2)))
+[[noreturn]] void log_fatal(const char *fmt, ...);
+
+void log_set_level(LogLevel level);
+__attribute__((format(printf, 2, 3)))
+void log_log(LogLevel level, const char *fmt, ...);
+
+//
 // Arenas
 //
 
@@ -54,8 +70,7 @@ struct Arr {
 
     T& operator[](u64 i) {
         if (i >= count) {
-            fprintf(stderr, "Bounds check fail! i = %" PRIu64 " count = %" PRIu64 "\n", i, count);
-            exit(EXIT_FAILURE);
+            log_fatal("Bounds check fail! i = %" PRIu64 ", count = %" PRIu64, i, count);
         }
         return value[i];
     }
@@ -68,6 +83,9 @@ struct Arena {
 };
 
 void *arena__push_bytes(Arena *arena, u64 size, u64 alignment = DEFAULT_ALIGNMENT);
+
+void arena_pool_init();
+Arena *arena_acquire();
 void arena_release(Arena *arena);
 
 template <typename T>
@@ -97,8 +115,7 @@ Arr<T> arr_from_null_terminated(T *v) {
 template <typename T>
 Arr<T> arr_slice(Arr<T> arr, u64 start, u64 end) {
     if (start > arr.count || end > arr.count || end < start) {
-        fprintf(stderr, "Invalid array slice: count = %" PRIu64 ", start = %" PRIu64 ", end = %" PRIu64 "\n", arr.count, start, end);
-        exit(EXIT_FAILURE);
+        log_fatal("Invalid array slice: count = %" PRIu64 ", start = %" PRIu64 ", end = %" PRIu64, arr.count, start, end);
     }
 
     return {
@@ -123,8 +140,7 @@ bool arr_eq(Arr<T> a, Arr<T> b) {
 template <typename T>
 void arr_copy(Arr<T> dest, Arr<T> source) {
     if (dest.count != source.count) {
-        fprintf(stderr, "Unequal array lengths: dest = %" PRIu64 ", source = %" PRIu64 "\n", dest.count, source.count);
-        exit(EXIT_FAILURE);
+        log_fatal("Unequal array lengths: dest = %" PRIu64 ", source = %" PRIu64, dest.count, source.count);
     }
     for (u64 i = 0; i < dest.count; i++) {
         dest[i] = source[i];
@@ -154,16 +170,20 @@ using Str = Arr<u8>;
 // }
 
 #define S(s) ((Str){ .value = (u8 *)(s), .count = (sizeof(s)) - 1 })
+#define FS(s) (int)(s).count, (char *)(s).value
 #define C(c) ((u8)(c))
 #define A(a) { .value = (a), .count = sizeof((a)) / sizeof((a)[0]) }
 
 char *str_to_c(Arena *arena, Str s);
-Str str_from_c(char *cstr);
+Str str_from_c(const char *cstr);
+Str str_from_c_len(const char *cstr);
 Str str_from_bytes(Arr<u8> bytes);
 bool char_is_whitespace(u8 c);
 Str str_trim(Str s);
 Str str_clone(Arena *arena, Str s);
 bool str_starts_with(Str s, Str prefix);
+__attribute__((format(printf, 2, 3)))
+Str str_format(Arena *arena, const char *format, ...);
 
 // Certainly possible to do this simply and w/o an iterator object, but just messin around
 struct StrLineIter {
@@ -185,11 +205,10 @@ struct Vec {
     T *value;
     u64 count; // Element count (not size in bytes)
     u64 cap; // Element capacity (not size capacity in bytes)
-    
+
     T& operator[](u64 i) {
         if (i >= count) {
-            fprintf(stderr, "Bounds check fail! %" PRIu64 " >= %" PRIu64 "\n", i, count);
-            exit(EXIT_FAILURE);
+            log_fatal("Bounds check fail! %" PRIu64 " >= %" PRIu64, i, count);
         }
         return value[i];
     }
@@ -229,7 +248,7 @@ Arr<T> vec_extend(Arena *arena, Vec<T> *vec, Arr<T> arr) {
     vec->count += arr.count;
     Arr<T> a = arr_slice(vec_arr(vec), start, vec->count);
     arr_copy(a, arr);
-    
+
     return a;
 }
 
@@ -324,18 +343,3 @@ OSResult cmd_run(Cmd *cmd);
 Arr<char *> cmd__build_args(Arena *arena, Cmd *cmd);
 Arr<char *> cmd__build_env(Arena *arena, Cmd *cmd);
 
-//
-// Logging
-//
-
-enum class LogLevel { Trace, Debug, Info, Warn, Error, Fatal };
-
-#define log_trace(...) log_log(LogLevel::Trace, __VA_ARGS__)
-#define log_debug(...) log_log(LogLevel::Debug, __VA_ARGS__)
-#define log_info(...)  log_log(LogLevel::Info, __VA_ARGS__)
-#define log_warn(...)  log_log(LogLevel::Warn, __VA_ARGS__)
-#define log_error(...) log_log(LogLevel::Error, __VA_ARGS__)
-#define log_fatal(...) log_log(LogLevel::Fatal, __VA_ARGS__)
-
-void log_set_level(LogLevel level);
-void log_log(LogLevel level, const char *fmt, ...);

@@ -1,5 +1,7 @@
 #include "base.hpp"
 
+#include <stdlib.h>
+
 static Str MAC_BACKUP_DIRS[] = {
     S("Documents"),
     S("Pictures"),
@@ -68,10 +70,10 @@ void backup_filesystem_to(
     ResticConfig *config,
     Arr<Str> extra_restic_args
 ) {
-    Arena scratch = {};
-    defer(arena_release(&scratch));
+    Arena *scratch = arena_acquire();
+    defer(arena_release(scratch));
 
-    log_info("Backup to '%s' started", str_to_c(&scratch, config->name));
+    log_info("Backup to '%s' started", str_to_c(scratch, config->name));
 
     // Build args
     Str base_restic_args[] = { 
@@ -80,33 +82,33 @@ void backup_filesystem_to(
         S("--exclude-caches"),
     };
     Vec<Str> restic_args = {};
-    vec_extend(&scratch, &restic_args, A(base_restic_args));
-    vec_extend(&scratch, &restic_args, extra_restic_args);
+    vec_extend(scratch, &restic_args, A(base_restic_args));
+    vec_extend(scratch, &restic_args, extra_restic_args);
 
     Arr<Str> excludes = A(EXCLUDE_PATTERNS);
     for (u64 i = 0; i < excludes.count; i++) {
-        vec_push(&scratch, &restic_args, S("--exclude"));
-        vec_push(&scratch, &restic_args, excludes[i]);
+        vec_push(scratch, &restic_args, S("--exclude"));
+        vec_push(scratch, &restic_args, excludes[i]);
     }
 
     // Build env
     Vec<Pair<Str, Str>> env = {};
-    vec_push(&scratch, &env, { S("RESTIC_REPOSITORY"), config->restic_repository });
-    vec_push(&scratch, &env, { S("RESTIC_PASSWORD"), config->restic_password });
+    vec_push(scratch, &env, { S("RESTIC_REPOSITORY"), config->restic_repository });
+    vec_push(scratch, &env, { S("RESTIC_PASSWORD"), config->restic_password });
     if (!arr_is_empty(config->aws_access_key_id)) {
-        vec_push(&scratch, &env, { S("AWS_ACCESS_KEY_ID"), config->aws_access_key_id });
+        vec_push(scratch, &env, { S("AWS_ACCESS_KEY_ID"), config->aws_access_key_id });
     }
     if (!arr_is_empty(config->aws_secret_access_key)) {
-        vec_push(&scratch, &env, { S("AWS_SECRET_ACCESS_KEY"), config->aws_secret_access_key });
+        vec_push(scratch, &env, { S("AWS_SECRET_ACCESS_KEY"), config->aws_secret_access_key });
     }
 
     // Build file input list (stdin)
     Vec<u8> abs_file_patterns = {};
     Str home = env_get(S("HOME"));
     for (u64 i = 0; i < file_patterns.count; i++) {
-        Str joined = path_join(&scratch, home, file_patterns[i]);
-        vec_extend(&scratch, &abs_file_patterns, joined);
-        vec_push(&scratch, &abs_file_patterns, C('\n'));
+        Str joined = path_join(scratch, home, file_patterns[i]);
+        vec_extend(scratch, &abs_file_patterns, joined);
+        vec_push(scratch, &abs_file_patterns, C('\n'));
     }
 
     Cmd restic_cmd = {
@@ -119,16 +121,16 @@ void backup_filesystem_to(
         log_error("Failed to execute restic command");
     }
 
-    log_info("Backup to '%s' complete", str_to_c(&scratch, config->name));
+    log_info("Backup to '%s' complete", str_to_c(scratch, config->name));
 }
 
 void do_backup() {
-    Arena arena = {};
-    defer(arena_release(&arena));
+    Arena *arena = arena_acquire();
+    defer(arena_release(arena));
 
     log_info("Starting system backup");
 
-    Arr<ResticConfig> configs = get_restic_configs(&arena);
+    Arr<ResticConfig> configs = get_restic_configs(arena);
     Str extra_restic_args[] = { S("--tag"), S("macos") };
     for (u64 i = 0; i < configs.count; i++) {
         backup_filesystem_to(A(MAC_BACKUP_DIRS), &configs[i], A(extra_restic_args));
@@ -139,6 +141,7 @@ void do_backup() {
 
 int main(int argc, char **argv, char **envp) {
     g_envp = arr_from_null_terminated(envp);
+    arena_pool_init();
 
     do_upgrade();
     do_backup();

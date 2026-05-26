@@ -1,55 +1,72 @@
 #include "base.hpp"
 
-#include <stdio.h>
-#include <stdlib.h>
 #include <fcntl.h>
 #include <time.h>
+#include <string.h>
+#include <stdio.h>
 
-void *os_alloc(u64 size);
-void os_free(void *buf, u64 size);
-
-void arena__ensure_init(Arena *arena) {
-    if (arena->data == nullptr) {
-        arena->reserved = megabytes(16);
-        arena->data = os_alloc(arena->reserved);
-    }
-}
+#include "platform.hpp"
 
 // TODO deal with e.g. string nonalignment
 void *arena__push_bytes(Arena *arena, u64 size, u64 alignment) {
-    arena__ensure_init(arena);
-
     void *pos = (void *)((u64)arena->data + arena->offset);
     size = align_to(size, alignment);
     arena->offset += size;
     if (arena->offset > arena->reserved) {
-         fprintf(stderr, "Arena over!\n");
-         exit(EXIT_FAILURE);
+         log_fatal("Arena over! "
+                 "size = %" PRIu64 
+                 ", new_offset = %" PRIu64 
+                 ", reserved = %" PRIu64, 
+                 size, arena->offset, arena->reserved);
     }
     return pos;
 }
 
-void arena_release(Arena *arena) {
-    if (arena->data != nullptr) {
-        os_free(arena->data, arena->reserved);
-        *arena = (Arena){};
+// TODO sane arena sizing/lifetime scheme
+static constexpr u64 ARENA_POOL_MAX = 16;
+static constexpr u64 ARENA_SIZE = megabytes(16);
+static Arena s_arena_pool[ARENA_POOL_MAX];
+static Arena *s_arena_stack[ARENA_POOL_MAX];
+static u64 s_arena_stack_top;
+
+void arena_pool_init() {
+    for (u64 i = 0; i < ARENA_POOL_MAX; i++) {
+        s_arena_pool[i].reserved = ARENA_SIZE;
+        s_arena_pool[i].data = os_alloc(s_arena_pool[i].reserved);
+        s_arena_stack[i] = &s_arena_pool[i];
     }
+}
+
+Arena *arena_acquire() {
+    if (s_arena_stack_top >= ARENA_POOL_MAX) {
+        log_fatal("FATAL: out of arenas");
+    }
+    return s_arena_stack[s_arena_stack_top++];
+}
+
+void arena_release(Arena *arena) {
+    if (s_arena_stack_top == 0) {
+        log_fatal("FATAL: tried to release too many arenas!");
+    }
+    s_arena_stack[--s_arena_stack_top] = arena;
+    memset(arena->data, 0, arena->offset);
+    arena->offset = 0;
 }
 
 char *str_to_c(Arena *arena, Str s) {
     Arr<char> cstr = arena_push_arr<char>(arena, s.count + 1);
-    // Compiler plz vectorize
-    for (u64 i = 0; i < s.count; i++) {
-        cstr[i] = s[i];
-    }
-    // Arena allocation is already zeroed, so null terminator is in place
+    memcpy(cstr.value, s.value, s.count);
     return cstr.value;
 }
 
-Str str_from_c(char *cstr) {
+Str str_from_c(const char *cstr) {
     u64 count = 0;
     while (cstr[count] != '\0') count++;
     return (Str){ .value = (u8 *)cstr, .count = count };
+}
+
+Str str_from_c_len(const char *cstr, u64 len) {
+    return { . value = (u8 *)cstr, .count = len };
 }
 
 // Returns a string from a utf8 byte buffer. Doesn't validate if it's actually utf8.
@@ -84,9 +101,7 @@ Str str_trim(Str s) {
 
 Str str_clone(Arena *arena, Str s) {
     Str clone = arena_push_arr<u8>(arena, s.count);
-    for (u64 i = 0; i < s.count; i++) {
-        clone[i] = s[i];
-    }
+    memcpy(clone.value, s.value, s.count);
     return clone;
 }
 
@@ -158,6 +173,24 @@ Pair<Str, Str> str_split2(Str base, u8 delim) {
     return result;
 }
 
+__attribute__((format(printf, 2, 3)))
+Str str_format(Arena *arena, const char *format, ...) {
+    char buf[kilobytes(8)];
+
+    va_list args;
+    va_start(args, format);
+    int n = vsnprintf(buf, sizeof(buf), format, args);
+    va_end(args);
+
+    if (n < 0) {
+        return S("<formatting error>");
+    }
+
+    Str s = { .value = (u8 *)buf, .count = (u64)n };
+    // TODO try to allocate directly on tip of arena?
+    return str_clone(arena, s);
+}
+
 //
 // Paths
 //
@@ -183,18 +216,16 @@ Str path_join(Arena *arena, Str left_path, Str right_path) {
 Arr<char *> g_envp;
 
 Str env_get(Str key) {
-    Arena scratch = {};
-    defer(arena_release(&scratch));
-
-    char *key_cstr = str_to_c(&scratch, key);
-    char *value_cstr = getenv(key_cstr);
-
-    Str result = {};
-    if (value_cstr != nullptr) {
-        result = str_from_c(value_cstr);
+    for (u64 i = 0; i < g_envp.count; i++) {
+        Str env_pair = str_from_c(g_envp[i]);
+        if (str_starts_with(env_pair, key)) {
+            if (env_pair.count > key.count && env_pair[key.count] == C('=')) {
+                return arr_slice(env_pair, key.count + 1, env_pair.count);
+            }
+        }
     }
 
-    return result;
+    return {};
 }
 
 //
@@ -222,7 +253,7 @@ static const char *level_colors[] = {
     "\x1b[94m", "\x1b[36m", "\x1b[32m", "\x1b[33m", "\x1b[31m", "\x1b[35m"
 };
 
-static void stdout_callback(LogEvent *ev) {
+static void log_stderr_callback(LogEvent *ev) {
     char buf[16];
     buf[strftime(buf, sizeof(buf), "%H:%M:%S", ev->time)] = '\0';
     fprintf(
@@ -233,10 +264,6 @@ static void stdout_callback(LogEvent *ev) {
     fflush(ev->out);
 }
 
-const char* log_level_string(int level) {
-    return level_strings[level];
-}
-
 void log_set_level(LogLevel level) {
     s_log.level = level;
 }
@@ -245,10 +272,26 @@ static void init_event(LogEvent *ev, FILE *out) {
     if (!ev->time) {
         time_t t = time(NULL);
         ev->time = localtime(&t);
+        ev->out = out;
     }
-    ev->out = out;
 }
 
+__attribute__((format(printf, 1, 2)))
+[[noreturn]] void log_fatal(const char *fmt, ...) {
+    LogEvent ev = {
+        .fmt   = fmt,
+        .level = LogLevel::Fatal,
+    };
+
+    init_event(&ev, stderr);
+    va_start(ev.ap, fmt);
+    log_stderr_callback(&ev);
+    va_end(ev.ap);
+
+    os_exit();
+}
+
+__attribute__((format(printf, 2, 3)))
 void log_log(LogLevel level, const char *fmt, ...) {
     LogEvent ev = {
         .fmt   = fmt,
@@ -258,7 +301,7 @@ void log_log(LogLevel level, const char *fmt, ...) {
     if ((int)level >= (int)s_log.level) {
         init_event(&ev, stderr);
         va_start(ev.ap, fmt);
-        stdout_callback(&ev);
+        log_stderr_callback(&ev);
         va_end(ev.ap);
     }
 }

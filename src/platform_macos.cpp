@@ -5,6 +5,8 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "platform.hpp"
+
 OSResult cmd__check_file_action(int code) {
     switch (code) {
         case 0: return OSResult::Ok;
@@ -17,8 +19,8 @@ OSResult cmd__check_file_action(int code) {
 
 // TODO assertions
 OSResult cmd_run(Cmd *cmd) {
-    Arena scratch = {};
-    defer(arena_release(&scratch));
+    Arena *scratch = arena_acquire();
+    defer(arena_release(scratch));
 
     posix_spawnattr_t spawnattr = {};
     switch (posix_spawnattr_init(&spawnattr)) {
@@ -60,7 +62,7 @@ OSResult cmd_run(Cmd *cmd) {
     }
 
     if (!arr_is_empty(cmd->cwd)) {
-        char *cwd_cstr = str_to_c(&scratch, cmd->cwd);
+        char *cwd_cstr = str_to_c(scratch, cmd->cwd);
         OSResult result = cmd__check_file_action(
                 posix_spawn_file_actions_addchdir_np(&actions, cwd_cstr));
         if (result != OSResult::Ok) return result;
@@ -75,9 +77,9 @@ OSResult cmd_run(Cmd *cmd) {
     if (result != OSResult::Ok) return result;
 
     pid_t pid = -1;
-    char *name = str_to_c(&scratch, cmd->name);
-    Arr<char *> args = cmd__build_args(&scratch, cmd);
-    Arr<char *> env = cmd__build_env(&scratch, cmd);
+    char *name = str_to_c(scratch, cmd->name);
+    Arr<char *> args = cmd__build_args(scratch, cmd);
+    Arr<char *> env = cmd__build_env(scratch, cmd);
 
     switch (posix_spawnp(&pid, name, &actions, &spawnattr, args.value, env.value)) {
         case 0: break;
