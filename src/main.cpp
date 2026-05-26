@@ -1,6 +1,9 @@
 #include "base.hpp"
 
 #include <stdlib.h>
+#include <stdio.h>
+
+#include "platform.hpp"
 
 static Str MAC_BACKUP_DIRS[] = {
     S("Documents"),
@@ -73,7 +76,7 @@ void backup_filesystem_to(
     Arena *scratch = arena_acquire();
     defer(arena_release(scratch));
 
-    log_info("Backup to '%s' started", str_to_c(scratch, config->name));
+    log_info("Backup to '%.*s' started", FS(config->name));
 
     // Build args
     Str base_restic_args[] = { 
@@ -121,7 +124,7 @@ void backup_filesystem_to(
         log_error("Failed to execute restic command");
     }
 
-    log_info("Backup to '%s' complete", str_to_c(scratch, config->name));
+    log_info("Backup to '%.*s' complete", FS(config->name));
 }
 
 void do_backup() {
@@ -142,6 +145,7 @@ void do_backup() {
 int main(int argc, char **argv, char **envp) {
     g_envp = arr_from_null_terminated(envp);
     arena_pool_init();
+    os_init();
 
     do_upgrade();
     do_backup();

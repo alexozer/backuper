@@ -4,6 +4,7 @@
 #include <time.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #include "platform.hpp"
 
@@ -288,7 +289,7 @@ __attribute__((format(printf, 1, 2)))
     log_stderr_callback(&ev);
     va_end(ev.ap);
 
-    os_exit();
+    exit(1);
 }
 
 __attribute__((format(printf, 2, 3)))

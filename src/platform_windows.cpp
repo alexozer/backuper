@@ -3,6 +3,10 @@
 
 #include <process.h>
 
+void os_init() {
+    // TODO
+}
+
 void *os_alloc(u64 size) {
     // TODO
     return nullptr;
@@ -15,8 +19,4 @@ void os_free(void *buf, u64 size) {
 OSResult cmd_run(Cmd *cmd) {
     // TODO
     return OSResult::OtherError;
-}
-
-[[noreturn]] void os_exit() {
-    _exit(1);
 }

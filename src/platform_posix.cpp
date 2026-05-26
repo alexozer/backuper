@@ -2,8 +2,19 @@
 
 #include <sys/mman.h>
 #include <unistd.h>
+#include <signal.h>
 
 #include "platform.hpp"
+
+void handle_signal(int signal) {
+    log_fatal("Caught signal, exiting");
+}
+
+void os_init() {
+    signal(SIGINT, handle_signal);
+    signal(SIGTERM, handle_signal);
+    signal(SIGQUIT, handle_signal);
+}
 
 void *os_alloc(u64 size) {
     void *buf = mmap(nullptr, (size_t)size, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
@@ -49,6 +60,3 @@ Arr<char *> cmd__build_env(Arena *arena, Cmd *cmd) {
     return vec_arr(&env);
 }
 
-[[noreturn]] void os_exit() {
-    _exit(1);
-}
