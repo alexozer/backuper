@@ -17,6 +17,7 @@ static Str EXCLUDE_PATTERNS[] = {
     S("node_modules/**"),
     S(".cache/**"),
     S(".zig-cache/**"),
+    S("zig-out/**"),
     S(".vscode/**"),
     S(".npm/**"),
     S(".vscode-server/**"),
