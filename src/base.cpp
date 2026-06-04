@@ -10,22 +10,18 @@
 
 // TODO deal with e.g. string nonalignment
 void *arena__push_bytes(Arena *arena, u64 size, u64 alignment) {
+    arena->offset = align_to(arena->offset, alignment);
     void *pos = (void *)((u64)arena->data + arena->offset);
-    size = align_to(size, alignment);
-    arena->offset += size;
+    arena->offset += align_to(size, alignment);
     if (arena->offset > arena->reserved) {
-         log_fatal("Arena over! "
-                 "size = %" PRIu64 
-                 ", new_offset = %" PRIu64 
-                 ", reserved = %" PRIu64, 
-                 size, arena->offset, arena->reserved);
+         log_fatal("Arena over! offset = %" PRIu64 ", reserved = %" PRIu64, arena->offset, arena->reserved);
     }
     return pos;
 }
 
 // TODO sane arena sizing/lifetime scheme
 static constexpr u64 ARENA_POOL_MAX = 16;
-static constexpr u64 ARENA_SIZE = megabytes(16);
+static constexpr u64 ARENA_SIZE = megabytes(32);
 static Arena s_arena_pool[ARENA_POOL_MAX];
 static Arena *s_arena_stack[ARENA_POOL_MAX];
 static u64 s_arena_stack_top;
@@ -92,8 +88,8 @@ Str str_trim(Str s) {
         start++;
     }
 
-    i64 end = ((i64)s.count) - 1;
-    while (end >= 0 && char_is_whitespace(s[end])) {
+    u64 end = s.count;
+    while (end > start && char_is_whitespace(s[end - 1])) {
         end--;
     }
 
@@ -104,6 +100,10 @@ Str str_clone(Arena *arena, Str s) {
     Str clone = arena_push_arr<u8>(arena, s.count);
     memcpy(clone.value, s.value, s.count);
     return clone;
+}
+
+bool str_eq(Str s1, Str s2) {
+    return arr_eq(s1, s2);
 }
 
 bool str_starts_with(Str s, Str prefix) {
@@ -214,6 +214,7 @@ Str path_join(Arena *arena, Str left_path, Str right_path) {
 // Subprocesses
 //
 
+Arr<char *> g_argv;
 Arr<char *> g_envp;
 
 Str env_get(Str key) {
@@ -289,7 +290,7 @@ __attribute__((format(printf, 1, 2)))
     log_stderr_callback(&ev);
     va_end(ev.ap);
 
-    exit(1);
+    exit(EXIT_FAILURE);
 }
 
 __attribute__((format(printf, 2, 3)))

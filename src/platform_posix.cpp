@@ -1,20 +1,14 @@
 #include "base.hpp"
 
 #include <sys/mman.h>
+#include <sys/unistd.h>
+#include <sys/stat.h>
+#include <sys/fcntl.h>
 #include <unistd.h>
-#include <signal.h>
+#include <time.h>
+#include <string.h>
 
 #include "platform.hpp"
-
-void handle_signal(int signal) {
-    log_fatal("Caught signal, exiting");
-}
-
-void os_init() {
-    signal(SIGINT, handle_signal);
-    signal(SIGTERM, handle_signal);
-    signal(SIGQUIT, handle_signal);
-}
 
 void *os_alloc(u64 size) {
     void *buf = mmap(nullptr, (size_t)size, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
@@ -28,7 +22,7 @@ void os_free(void *buf, u64 size) {
     munmap(buf, (size_t)size);
 }
 
-Arr<char *> cmd__build_args(Arena *arena, Cmd *cmd) {
+Arr<char *> posix_build_args(Arena *arena, Cmd *cmd) {
     Arr<char *> args = arena_push_arr<char *>(arena, cmd->args.count + 2);
     char *name = str_to_c(arena, cmd->name);
     args[0] = name;
@@ -38,7 +32,7 @@ Arr<char *> cmd__build_args(Arena *arena, Cmd *cmd) {
     return args;
 }
 
-Arr<char *> cmd__build_env(Arena *arena, Cmd *cmd) {
+Arr<char *> posix_build_env(Arena *arena, Cmd *cmd) {
     Vec<char *> env = {};
 
     for (u64 i = 0; i < cmd->env.count; i++) {
@@ -60,3 +54,45 @@ Arr<char *> cmd__build_env(Arena *arena, Cmd *cmd) {
     return vec_arr(&env);
 }
 
+Instant os_get_monotonic_time() {
+    struct timespec tp = {};
+    if (clock_gettime(CLOCK_MONOTONIC, &tp) != 0) {
+        log_fatal("clock_gettime() failed");
+    }
+    return {
+        .seconds = (i64)tp.tv_sec,
+        .nanoseconds = (u32)tp.tv_nsec,
+    };
+}
+
+OSResult os_read_file(Arena *arena, Str path, Arr<u8> *out_buf) {
+    // TODO: mmap without memcpy - associate a "destructor" with the arena?
+
+    Arena *scratch = arena_acquire();
+    defer(arena_release(scratch));
+
+    char *path_cstr = str_to_c(scratch, path);
+
+    int fd = open(path_cstr, O_RDONLY);
+    if (fd == -1) {
+        return OSResult::OtherError;
+    }
+    defer(close(fd));
+
+    struct stat st = {};
+    if (fstat(fd, &st) == -1) {
+        return OSResult::OtherError;
+    }
+    u64 size = (u64)st.st_size;
+
+    void *buf = mmap(nullptr, size, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (buf == nullptr) {
+        return OSResult::OtherError;
+    }
+    defer(munmap(buf, size));
+
+    *out_buf = arena_push_arr<u8>(arena, size);
+    memcpy(out_buf->value, buf, size);
+
+    return OSResult::Ok;
+}

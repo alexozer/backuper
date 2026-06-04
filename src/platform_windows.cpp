@@ -3,20 +3,22 @@
 
 #include <process.h>
 
-void os_init() {
-    // TODO
-}
-
 void *os_alloc(u64 size) {
-    // TODO
-    return nullptr;
+    log_fatal("Unimplemented");
 }
 
 void os_free(void *buf, u64 size) {
-    // TODO
+    log_fatal("Unimplemented");
 }
 
 OSResult cmd_run(Cmd *cmd) {
-    // TODO
-    return OSResult::OtherError;
+    log_fatal("Unimplemented");
+}
+
+Instant os_get_monotonic_time() {
+    log_fatal("Unimplemented");
+}
+
+OSResult os_read_file(Arena *arena, Str path, Arr<u8> *out_buf) {
+    log_fatal("Unimplemented");
 }

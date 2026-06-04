@@ -16,6 +16,7 @@ static Str MAC_BACKUP_DIRS[] = {
 static Str EXCLUDE_PATTERNS[] = {
     S("node_modules/**"),
     S(".cache/**"),
+    S(".zig-cache/**"),
     S(".vscode/**"),
     S(".npm/**"),
     S(".vscode-server/**"),
@@ -76,7 +77,7 @@ void backup_filesystem_to(
     Arena *scratch = arena_acquire();
     defer(arena_release(scratch));
 
-    log_info("Backup to '%.*s' started", FS(config->name));
+    log_info("Backup to '%.*s' started", SF(config->name));
 
     // Build args
     Str base_restic_args[] = { 
@@ -124,7 +125,7 @@ void backup_filesystem_to(
         log_error("Failed to execute restic command");
     }
 
-    log_info("Backup to '%.*s' complete", FS(config->name));
+    log_info("Backup to '%.*s' complete", SF(config->name));
 }
 
 void do_backup() {
@@ -143,9 +144,9 @@ void do_backup() {
 }
 
 int main(int argc, char **argv, char **envp) {
+    g_argv = { .value = argv, .count = (u64)argc };
     g_envp = arr_from_null_terminated(envp);
     arena_pool_init();
-    os_init();
 
     do_upgrade();
     do_backup();

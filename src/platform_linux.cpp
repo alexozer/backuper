@@ -27,8 +27,8 @@ OSResult cmd_run(Cmd *cmd) {
     }
 
     char *name = str_to_c(scratch, cmd->name);
-    Arr<char *> args = cmd__build_args(scratch, cmd);
-    Arr<char *> env = cmd__build_env(scratch, cmd);
+    Arr<char *> args = posix_build_args(scratch, cmd);
+    Arr<char *> env = posix_build_env(scratch, cmd);
     char *cwd = str_to_c(scratch, cmd->cwd);
 
     pid_t pid = fork();
