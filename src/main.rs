@@ -1,6 +1,9 @@
 use anyhow::{Context, bail};
 use std::{
-    env, io::Write, process::{Command, Stdio}, time::{self, Duration}
+    env,
+    io::Write,
+    process::{Command, Stdio},
+    time::{self, Duration},
 };
 
 //
@@ -27,6 +30,8 @@ static EXCLUDE_PATTERNS: &[&str] = &[
     "Photo Booth Library",
     "target/debug/**",
     "target/release/**",
+    "zig-out/**",
+    ".zig-cache/**",
 ];
 
 //
