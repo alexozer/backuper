@@ -1,40 +1,35 @@
 #include "base.hpp"
 
-#include <stdlib.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #include "platform.hpp"
 
-static Str MAC_BACKUP_DIRS[] = {
+static Str NAS_DIRS[] = {
+    S("Documents"), S("Pictures"), S("Movies"), S("Library/Application Support/Anki2"), S("Music"),
+};
+
+static Str CLOUD_DIRS[] = {
     S("Documents"),
     S("Pictures"),
-    S("Music"),
     S("Movies"),
     S("Library/Application Support/Anki2"),
 };
 
 static Str EXCLUDE_PATTERNS[] = {
-    S("node_modules/**"),
-    S(".cache/**"),
-    S(".zig-cache/**"),
-    S("zig-out/**"),
-    S(".vscode/**"),
-    S(".npm/**"),
-    S(".vscode-server/**"),
-    S("*.photoslibrary"),
-    S(".DS_Store"),
-    S("build*/**"),
-    S("Photo Booth Library"),
-    S("target/debug/**"),
-    S("target/release/**"),
+    S("node_modules/**"), S(".cache/**"),         S(".zig-cache/**"), S("zig-out/**"),
+    S("zig-pkg/**"),      S(".vscode/**"),        S(".npm/**"),       S(".vscode-server/**"),
+    S("*.photoslibrary"), S(".DS_Store"),         S("build*/**"),     S("Photo Booth Library"),
+    S("target/debug/**"), S("target/release/**"), S("Music/Music"),
 };
 
 struct ResticConfig {
     Str name;
+    Arr<Str> dirs;
     Str restic_repository;
     Str restic_password;
-    Str aws_access_key_id; // Optional
-    Str aws_secret_access_key; // Optional
+    Str aws_access_key_id;      // Optional
+    Str aws_secret_access_key;  // Optional
 };
 
 Arr<ResticConfig> get_restic_configs(Arena *arena) {
@@ -42,11 +37,13 @@ Arr<ResticConfig> get_restic_configs(Arena *arena) {
 
     ResticConfig *nas_config = vec_push(arena, &configs, ResticConfig{});
     nas_config->name = S("NAS REST");
+    nas_config->dirs = A(NAS_DIRS);
     nas_config->restic_repository = env_get(S("BACKUPER_NAS_REPOSITORY"));
     nas_config->restic_password = env_get(S("BACKUPER_PASSWORD"));
 
     ResticConfig *cloud_config = vec_push(arena, &configs, ResticConfig{});
     cloud_config->name = S("Cloud B2");
+    cloud_config->dirs = A(CLOUD_DIRS);
     cloud_config->restic_repository = env_get(S("BACKUPER_AWS_REPOSITORY"));
     cloud_config->restic_password = env_get(S("BACKUPER_PASSWORD"));
     cloud_config->aws_access_key_id = env_get(S("BACKUPER_AWS_ACCESS_KEY_ID"));
@@ -58,9 +55,9 @@ Arr<ResticConfig> get_restic_configs(Arena *arena) {
 void do_upgrade() {
     log_info("Starting macOS upgrades");
 
-    Str args[] = { S("upgrade") };
-    Cmd cmd = { 
-        .name = S("brew"), 
+    Str args[] = {S("upgrade")};
+    Cmd cmd = {
+        .name = S("brew"),
         .args = A(args),
     };
     if (cmd_run(&cmd) != OSResult::Ok) {
@@ -70,20 +67,17 @@ void do_upgrade() {
     log_info("Finished macOS upgrades");
 }
 
-void backup_filesystem_to(
-    Arr<Str> file_patterns,
-    ResticConfig *config,
-    Arr<Str> extra_restic_args
-) {
+void backup_filesystem_to(ResticConfig *config, Arr<Str> extra_restic_args) {
     Arena *scratch = arena_acquire();
     defer(arena_release(scratch));
 
     log_info("Backup to '%.*s' started", SF(config->name));
 
     // Build args
-    Str base_restic_args[] = { 
-        S("backup"), 
-        S("--files-from"), S("-"), 
+    Str base_restic_args[] = {
+        S("backup"),
+        S("--files-from"),
+        S("-"),
         S("--exclude-caches"),
     };
     Vec<Str> restic_args = {};
@@ -98,20 +92,20 @@ void backup_filesystem_to(
 
     // Build env
     Vec<Pair<Str, Str>> env = {};
-    vec_push(scratch, &env, { S("RESTIC_REPOSITORY"), config->restic_repository });
-    vec_push(scratch, &env, { S("RESTIC_PASSWORD"), config->restic_password });
+    vec_push(scratch, &env, {S("RESTIC_REPOSITORY"), config->restic_repository});
+    vec_push(scratch, &env, {S("RESTIC_PASSWORD"), config->restic_password});
     if (!arr_is_empty(config->aws_access_key_id)) {
-        vec_push(scratch, &env, { S("AWS_ACCESS_KEY_ID"), config->aws_access_key_id });
+        vec_push(scratch, &env, {S("AWS_ACCESS_KEY_ID"), config->aws_access_key_id});
     }
     if (!arr_is_empty(config->aws_secret_access_key)) {
-        vec_push(scratch, &env, { S("AWS_SECRET_ACCESS_KEY"), config->aws_secret_access_key });
+        vec_push(scratch, &env, {S("AWS_SECRET_ACCESS_KEY"), config->aws_secret_access_key});
     }
 
     // Build file input list (stdin)
     Vec<u8> abs_file_patterns = {};
     Str home = env_get(S("HOME"));
-    for (u64 i = 0; i < file_patterns.count; i++) {
-        Str joined = path_join(scratch, home, file_patterns[i]);
+    for (u64 i = 0; i < config->dirs.count; i++) {
+        Str joined = path_join(scratch, home, config->dirs[i]);
         vec_extend(scratch, &abs_file_patterns, joined);
         vec_push(scratch, &abs_file_patterns, C('\n'));
     }
@@ -136,16 +130,16 @@ void do_backup() {
     log_info("Starting system backup");
 
     Arr<ResticConfig> configs = get_restic_configs(arena);
-    Str extra_restic_args[] = { S("--tag"), S("macos") };
+    Str extra_restic_args[] = {S("--tag"), S("macos")};
     for (u64 i = 0; i < configs.count; i++) {
-        backup_filesystem_to(A(MAC_BACKUP_DIRS), &configs[i], A(extra_restic_args));
+        backup_filesystem_to(&configs[i], A(extra_restic_args));
     }
 
     log_info("Finished system backup");
 }
 
 int main(int argc, char **argv, char **envp) {
-    g_argv = { .value = argv, .count = (u64)argc };
+    g_argv = {.value = argv, .count = (u64)argc};
     g_envp = arr_from_null_terminated(envp);
     arena_pool_init();
 

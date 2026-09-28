@@ -1,0 +1,9 @@
+---
+BasedOnStyle: Chromium
+ColumnLimit: 100
+IndentWidth: 4
+IndentCaseLabels: false
+AllowShortIfStatementsOnASingleLine: true
+AllowShortFunctionsOnASingleLine: None
+PointerAlignment: Right
+...
