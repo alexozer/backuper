@@ -123,6 +123,21 @@ void backup_filesystem_to(ResticConfig *config, Arr<Str> extra_restic_args) {
     log_info("Backup to '%.*s' complete", SF(config->name));
 }
 
+void do_beebox_backup() {
+    log_info("Starting Beebox backup");
+
+    Str args[] = {S("alex@beebox"), S("/home/alex/backup.sh")};
+    Cmd cmd = {
+        .name = S("ssh"),
+        .args = A(args),
+    };
+    if (cmd_run(&cmd) != OSResult::Ok) {
+        log_error("Failed to execute ssh command");
+    }
+
+    log_info("Finished Beebox backup");
+}
+
 void do_backup() {
     Arena *arena = arena_acquire();
     defer(arena_release(arena));
@@ -134,6 +149,8 @@ void do_backup() {
     for (u64 i = 0; i < configs.count; i++) {
         backup_filesystem_to(&configs[i], A(extra_restic_args));
     }
+
+    do_beebox_backup();
 
     log_info("Finished system backup");
 }
