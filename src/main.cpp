@@ -126,7 +126,7 @@ void backup_filesystem_to(ResticConfig *config, Arr<Str> extra_restic_args) {
 void do_beebox_backup() {
     log_info("Starting Beebox backup");
 
-    Str args[] = {S("alex@beebox"), S("/home/alex/backup.sh")};
+    Str args[] = {S("alex@beebox-raw"), S("/home/alex/Documents/alexserv/backup.sh")};
     Cmd cmd = {
         .name = S("ssh"),
         .args = A(args),
